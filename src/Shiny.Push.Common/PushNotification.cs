@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using Shiny.Notifications;
 
 
 namespace Shiny.Push
@@ -15,7 +14,15 @@ namespace Shiny.Push
         }
 
 
+        /// <summary>
+        /// This will contain push data if any are received;
+        /// </summary>
         public ReadOnlyDictionary<string, string> Data { get; }
+
+
+        /// <summary>
+        /// This will be null if received in the background
+        /// </summary>
         public Notification? Notification { get; }
     }
 }

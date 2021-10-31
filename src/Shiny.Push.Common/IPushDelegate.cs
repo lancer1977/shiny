@@ -11,7 +11,7 @@ namespace Shiny.Push
         /// </summary>
         /// <param name="response"></param>
         /// <returns></returns>
-        Task OnEntry(PushNotificationResponse response);
+        Task OnEntry(PushNotification notification);
 
 
         /// <summary>
