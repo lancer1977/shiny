@@ -6,7 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Com.OneSignal.Abstractions;
 using OS = global::Com.OneSignal.OneSignal;
-using Shiny.Notifications;
 
 
 namespace Shiny.Push.OneSignal
@@ -31,11 +30,19 @@ namespace Shiny.Push.OneSignal
             OS.Current.SetLogLevel(this.config.LogLevel, this.config.VisualLogLevel);
             OS.Current
                 .StartInit(this.config.AppId)
-                .HandleNotificationOpened(async x =>
+                .HandleNotificationOpened(async notification =>
                 {
-                    var notification = ToNotification(x.notification?.payload);
-                    var pr = new PushNotificationResponse(notification, x.action?.actionID, null);
-                    await this.container.OnEntry(pr).ConfigureAwait(false);
+                    //var data = payload?
+                    //    .additionalData?
+                    //    .ToDictionary(
+                    //        y => y.Key,
+                    //        y => y.Value.ToString()
+                    //    )
+                    //    ?? new Dictionary<string, string>(0);
+
+                    //var notification = ToNotification(x.notification?.payload);
+                    //var pr = new PushNotification(notification, x.action?.actionID, null);
+                    //await this.container.OnEntry(pr).ConfigureAwait(false);
                 })
                 .HandleNotificationReceived(async x =>
                 {
@@ -137,7 +144,7 @@ namespace Shiny.Push.OneSignal
         }
 
 
-        static Notification ToNotification(OSNotificationPayload payload)
+        static NotificationData ToNotification(OSNotificationPayload payload)
         {
             var data = payload?
                 .additionalData?

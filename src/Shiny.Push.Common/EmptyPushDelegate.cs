@@ -10,7 +10,7 @@ namespace Shiny.Push
     /// </summary>
     public class EmptyPushDelegate : IPushDelegate
     {
-        public Task OnEntry(PushNotificationResponse response) => Task.CompletedTask;
+        public Task OnEntry(PushNotification response) => Task.CompletedTask;
         public Task OnReceived(PushNotification notification) => Task.CompletedTask;
         public Task OnTokenRefreshed(string token) => Task.CompletedTask;
     }

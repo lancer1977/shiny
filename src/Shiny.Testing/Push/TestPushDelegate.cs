@@ -7,8 +7,8 @@ namespace Shiny.Testing.Push
 {
     public class TestPushDelegate : IPushDelegate
     {
-        public static Action<PushNotificationResponse>? Entry { get; set; }
-        public Task OnEntry(PushNotificationResponse response)
+        public static Action<PushNotification>? Entry { get; set; }
+        public Task OnEntry(PushNotification response)
         {
             Entry?.Invoke(response);
             return Task.CompletedTask;

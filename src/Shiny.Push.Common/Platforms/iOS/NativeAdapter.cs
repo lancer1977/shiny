@@ -2,7 +2,6 @@
 using System.Threading;
 using System.Threading.Tasks;
 using Foundation;
-using Shiny.Notifications;
 using Shiny.Push.Infrastructure;
 using UIKit;
 using UserNotifications;
@@ -49,8 +48,8 @@ namespace Shiny.Push
 
 
         IDisposable? onEntrySub;
-        Func<PushNotificationResponse, Task>? onEntry;
-        public Func<PushNotificationResponse, Task>? OnEntry
+        Func<PushNotification, Task>? onEntry;
+        public Func<PushNotification, Task>? OnEntry
         {
             get => this.onEntry;
             set
@@ -62,18 +61,19 @@ namespace Shiny.Push
                 }
                 else
                 {
+                    // TODO: ios can handle category/actions
                     this.onEntrySub = this.lifecycle.RegisterForNotificationReceived(async response =>
                     {
-                        if (response.Notification?.Request?.Trigger is UNPushNotificationTrigger)
-                        {
-                            var shiny = response.FromNative();
-                            var pr = new PushNotificationResponse(
-                                shiny.Notification,
-                                shiny.ActionIdentifier,
-                                shiny.Text
-                            );
-                            await this.onEntry.Invoke(pr).ConfigureAwait(false);
-                        }
+                        //if (response.Notification?.Request?.Trigger is UNPushNotificationTrigger)
+                        //{
+                        //    var shiny = response.FromNative();
+                        //    var pr = new PushNotificationResponse(
+                        //        shiny.Notification,
+                        //        shiny.ActionIdentifier,
+                        //        shiny.Text
+                        //    );
+                        //    await this.onEntry.Invoke(pr).ConfigureAwait(false);
+                        //}
                     });
                 }
             }
