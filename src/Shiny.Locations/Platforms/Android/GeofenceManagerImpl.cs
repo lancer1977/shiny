@@ -79,7 +79,7 @@ namespace Shiny.Locations
         //    => this.context.GetCurrentLocationAccess(true, true, true, true);
 
         public override Task<AccessState> RequestAccess()
-            => this.context.RequestBackgroundLocationAccess(LocationPermissionType.FineRequired);
+            => this.context.RequestLocationAccess(true, true, true);
 
 
         public override async Task StartMonitoring(GeofenceRegion region)

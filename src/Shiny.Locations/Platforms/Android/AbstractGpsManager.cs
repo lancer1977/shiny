@@ -59,8 +59,7 @@ namespace Shiny.Locations
 
 
         public Task<AccessState> RequestAccess(GpsRequest request)
-            => this.Context.RequestLocationAccess(LocationPermissionType.Fine);
-
+            => this.Context.RequestLocationAccess(request.UseBackground, true, false);
 
         public virtual IObservable<IGpsReading> WhenReading()
             => this.readingSubj;
