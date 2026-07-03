@@ -1,0 +1,33 @@
+name: Validate
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - dev
+      - preview
+  pull_request:
+    branches:
+      - main
+      - master
+      - dev
+      - preview
+  workflow_dispatch:
+
+jobs:
+  stewardship:
+    name: Stewardship smoke checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            10.0.x
+
+      - name: Validate repository
+        run: ./scripts/validate.sh
