@@ -28,6 +28,10 @@ env:
   MastodonClientSecret: ${{secrets.MASTODON_CLIENT_SECRET}}
   MastodonInstance: 'dotnet.social'
 
+concurrency:
+  group: shiny-build-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
 
