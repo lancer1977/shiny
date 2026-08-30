@@ -1,29 +1,62 @@
-﻿using System;
+﻿#if PLATFORM
+using System;
+using System.Linq;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Shiny.Jobs;
 using Shiny.Jobs.Infrastructure;
 
+namespace Shiny;
 
-namespace Shiny
+
+public static class ServiceCollectionExtensions
 {
-    public static class ServiceCollectionExtensions
+    /// <summary>
+    /// Register a job on the job manager
+    /// </summary>
+    /// <param name="services">The service collection to register with</param>
+    /// <param name="jobInfo">The job info to register</param>
+    public static IServiceCollection AddJob(this IServiceCollection services, JobInfo jobInfo)
     {
-        public static void UseJobs(this IServiceCollection services, bool? clearPrevJobs = null)
-        {
-            if (clearPrevJobs != null)
-                JobsStartup.ClearJobsBeforeRegistering = clearPrevJobs.Value;
+        JobLifecycleTask.AddJob(jobInfo);
+        return services.AddJobs();
+    }
 
-            services.TryAddSingleton<JobsStartup>();
-            services.TryAddSingleton<JobLifecycleTask>();
-#if __IOS__
-            if (BgTasksJobManager.IsAvailable)
-                services.TryAddSingleton<IJobManager, BgTasksJobManager>();
-            else
-                services.TryAddSingleton<IJobManager, JobManager>();
-#else
-            services.TryAddSingleton<IJobManager, JobManager>();
-#endif
+
+    /// <summary>
+    /// Registers a job on the job manager
+    /// </summary>
+    /// <param name="services"></param>
+    /// <param name="jobType"></param>
+    /// <param name="identifier"></param>
+    public static IServiceCollection AddJob(
+        this IServiceCollection services,
+        Type jobType,
+        string? identifier = null,
+        InternetAccess requiredNetwork = InternetAccess.None,
+        bool runInForeground = false,
+        params (string Key, string Value)[] parameters
+    )
+        => services.AddJob(new JobInfo(
+            identifier ?? jobType.FullName,
+            jobType,
+            runInForeground,
+            Parameters: parameters?.ToDictionary(x => x.Key, x => x.Value),
+            RequiredInternetAccess: requiredNetwork
+        ));
+
+    public static IServiceCollection AddJobs(this IServiceCollection services)
+    {
+        services.AddConnectivity();
+        services.AddBattery();
+        
+        if (!services.HasService<IJobManager>())
+        {
+            services.AddDefaultRepository();
+            services.AddShinyService<JobLifecycleTask>();
+            services.AddShinyService<JobManager>();
         }
+
+        return services;
     }
 }
+#endif

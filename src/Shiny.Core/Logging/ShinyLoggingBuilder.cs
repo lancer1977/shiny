@@ -1,15 +1,18 @@
-﻿using System;
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
+namespace Shiny.Logging;
 
-namespace Shiny.Logging
+
+internal class ShinyLoggingBuilder : ILoggingBuilder
 {
-    public class ShinyLoggingBuilder : ILoggingBuilder
+    public ShinyLoggingBuilder(IServiceCollection services)
     {
-        public ShinyLoggingBuilder(IServiceCollection services)
-            => this.Services = services;
-
-        public IServiceCollection Services { get; }
+        this.Services = services;
+        this.Services.AddLogging();
+        //this.Services.TryAddSingleton<ILoggerFactory, NullLoggerFactory>();
+        this.Services.AddLogging();
     }
+
+    public IServiceCollection Services { get; }
 }

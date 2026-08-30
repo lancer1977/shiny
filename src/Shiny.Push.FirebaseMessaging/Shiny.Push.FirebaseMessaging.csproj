@@ -1,36 +1,24 @@
-<Project Sdk="MSBuild.Sdk.Extras">
+<Project Sdk="Microsoft.NET.Sdk">
+    <Import Project="Sdk.props" Sdk="MSBuild.Sdk.Extras" Version="$(MSBuildSdkExtrasVersion)" Condition="'$(UseMSBuild)' == 'true'" />
 
     <PropertyGroup>
-        <TargetFrameworks>netstandard2.0;xamarin.ios10;$(AndroidTargetFramework)</TargetFrameworks>
-        <Description>Shiny Push Integration - Firebase Messaging</Description>
+        <TargetFrameworks>$(IosTargetFrameworks);$(AndroidTargetFrameworks)</TargetFrameworks>
+        <Description>Shiny Push Integration - Google Firebase Cloud Messaging</Description>
     </PropertyGroup>
 
+    <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+      <CreatePackage>false</CreatePackage>
+    </PropertyGroup>
+    <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+      <CreatePackage>false</CreatePackage>
+    </PropertyGroup>
     <ItemGroup>
-        <Compile Remove="Platforms\**\*.cs" />
-        <None Include="Platforms\**\*.cs" />
-    </ItemGroup>
-
-    <ItemGroup Condition=" $(TargetFramework.StartsWith('netstandard')) ">
-        <ProjectReference Include="..\Shiny.Core\Shiny.Core.csproj" />
-        <ProjectReference Include="..\Shiny.Push.Common\Shiny.Push.Common.csproj" />
-        <Compile Include="Platforms\Shared\**\*.cs" />
-    </ItemGroup>
-
-    <ItemGroup Condition=" $(TargetFramework.StartsWith('xamarin.ios')) ">
-        <PackageReference Include="Xamarin.Firebase.iOS.Core" />
-        <PackageReference Include="Xamarin.Firebase.iOS.CloudMessaging" />
-        <PackageReference Include="Xamarin.Firebase.iOS.InstanceID" />
-        <ProjectReference Include="..\Shiny.Core\Shiny.Core.csproj" />
-        <ProjectReference Include="..\Shiny.Push.Common\Shiny.Push.Common.csproj" />
-        <Compile Include="Platforms\iOS\**\*.cs" />
-        <Compile Include="Platforms\Shared\**\*.cs" />
-    </ItemGroup>
-
-    <ItemGroup Condition=" $(TargetFramework.StartsWith('monoandroid')) ">
-        <ProjectReference Include="..\Shiny.Core\Shiny.Core.csproj" />
         <ProjectReference Include="..\Shiny.Push\Shiny.Push.csproj" />
-        <ProjectReference Include="..\Shiny.Push.Common\Shiny.Push.Common.csproj" />
-        <Compile Include="Platforms\Shared\**\*.cs" />
     </ItemGroup>
 
+    <ItemGroup Condition="'$(IsIosBuild)' == 'true'">
+        <PackageReference Include="Xamarin.Firebase.iOS.CloudMessaging" Version="8.10.0.3" />
+    </ItemGroup>
+
+    <Import Project="Sdk.targets" Sdk="MSBuild.Sdk.Extras" Version="$(MSBuildSdkExtrasVersion)" Condition="'$(UseMSBuild)' == 'true'" />
 </Project>

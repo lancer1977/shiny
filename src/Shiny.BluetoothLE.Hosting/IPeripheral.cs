@@ -1,17 +1,20 @@
-﻿using System;
+﻿namespace Shiny.BluetoothLE.Hosting;
 
 
-namespace Shiny.BluetoothLE.Hosting
+public interface IPeripheral
 {
-    public interface IPeripheral
-    {
-        //string Identifier { get; }
-        // I can get this on iOS and Droid
-        string Uuid { get; }
+    /// <summary>
+    /// The connection ID
+    /// </summary>
+    string Uuid { get; }
 
-        /// <summary>
-        /// You can set any data you want here
-        /// </summary>
-        object Context { get; set; }
-    }
+    /// <summary>
+    /// The current MTU
+    /// </summary>
+    int Mtu { get; }
+
+    /// <summary>
+    /// You can set any data you want here
+    /// </summary>
+    object? Context { get; set; }
 }

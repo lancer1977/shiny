@@ -1,41 +1,48 @@
-﻿using System;
-using System.Threading;
+﻿using System.Threading;
 using System.Threading.Tasks;
 using Android.Content;
 using AndroidX.Concurrent.Futures;
 using AndroidX.Work;
 using Google.Common.Util.Concurrent;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Shiny.Hosting;
+
+namespace Shiny.Jobs;
 
 
-namespace Shiny.Jobs
+public class ShinyJobWorker : ListenableWorker, CallbackToFutureAdapter.IResolver
 {
-    public class ShinyJobWorker : ListenableWorker, CallbackToFutureAdapter.IResolver
+    public const string ShinyJobIdentifier = nameof(ShinyJobIdentifier);
+    readonly CancellationTokenSource cancelSource = new();
+    public ShinyJobWorker(Context context, WorkerParameters workerParams) : base(context, workerParams) { }
+
+
+    public Java.Lang.Object AttachCompleter(CallbackToFutureAdapter.Completer completer)
     {
-        public const string ShinyJobIdentifier = nameof(ShinyJobIdentifier);
-        readonly CancellationTokenSource cancelSource = new CancellationTokenSource();
-
-
-        public ShinyJobWorker(Context context, WorkerParameters workerParams) : base(context, workerParams)
+        if (!Host.IsInitialized)
         {
+            completer.SetException(new Java.Lang.Throwable("The Shiny Host is not initialized and cannot run jobs"));
         }
-
-
-        public Java.Lang.Object AttachCompleter(CallbackToFutureAdapter.Completer completer)
+        else if (Host.GetService<IJobManager>() == null)
         {
+            completer.SetException(new Java.Lang.Throwable("JobManager is not registered with Shiny"));
+        }
+        else
+        {
+            var host = Host.Current;
             var jobName = this.InputData.GetString(ShinyJobIdentifier);
-            var jobManager = ShinyHost.Resolve<IJobManager>();
+            var jobManager = Host.Current.Services.GetRequiredService<IJobManager>();
+            var logger = host.Logging.CreateLogger<IJobManager>();
 
-            //if (jobManager != null && !jobName.IsEmpty())
-            if (jobName.IsEmpty() || jobManager == null)
+            if (jobName.IsEmpty())
             {
-                //completer.Set(Result.InvokeFailure());
                 completer.Set(Result.InvokeSuccess());
             }
             else
             {
                 jobManager
-                    .Run(jobName, this.cancelSource.Token)
+                    .Run(jobName!, this.cancelSource.Token)
                     .ContinueWith(x =>
                     {
                         switch (x.Status)
@@ -45,11 +52,7 @@ namespace Shiny.Jobs
                                 break;
 
                             case TaskStatus.Faulted:
-                                ShinyHost
-                                    .LoggerFactory
-                                    .CreateLogger<ILogger<IJobManager>>()
-                                    .LogError(x.Exception, "Error in job");
-
+                                logger.LogError(x.Exception, "Error in job");
                                 completer.SetException(new Java.Lang.Throwable(x.Exception.ToString()));
                                 break;
 
@@ -59,18 +62,18 @@ namespace Shiny.Jobs
                         }
                     });
             }
-            return "AsyncOp";
         }
+        return "AsyncOp";
+    }
 
 
-        public override IListenableFuture StartWork()
-            => CallbackToFutureAdapter.GetFuture(this);
+    public override IListenableFuture StartWork()
+        => CallbackToFutureAdapter.GetFuture(this);
 
 
-        public override void OnStopped()
-        {
-            this.cancelSource.Cancel();
-            base.OnStopped();
-        }
+    public override void OnStopped()
+    {
+        this.cancelSource.Cancel();
+        base.OnStopped();
     }
 }

@@ -1,41 +1,15 @@
-﻿<Project Sdk="MSBuild.Sdk.Extras">
+﻿<Project Sdk="Microsoft.NET.Sdk">
+    <Import Project="Sdk.props" Sdk="MSBuild.Sdk.Extras" Version="$(MSBuildSdkExtrasVersion)" Condition="'$(UseMSBuild)' == 'true'" />
 
     <PropertyGroup>
-        <TargetFrameworks>netstandard2.0;xamarin.ios10;$(AndroidTargetFramework)</TargetFrameworks>
-        <TargetFrameworks Condition=" $(OS) == 'WINDOWS_NT' ">$(UwpTargetFramework);$(TargetFrameworks)</TargetFrameworks>
+        <TargetFrameworks>$(DefaultTargetFrameworks)</TargetFrameworks>
         <Description>Shiny Push Integration - Microsoft Azure Notification Hubs</Description>
     </PropertyGroup>
 
     <ItemGroup>
-        <Compile Remove="Platforms\**\*.cs" />
-        <None Include="Platforms\**\*.cs" />
-        <PackageReference Include="Microsoft.Azure.NotificationHubs" />
+        <PackageReference Include="Microsoft.Azure.NotificationHubs" Version="4.1.0" />
+        <ProjectReference Include="..\Shiny.Push\Shiny.Push.csproj" />
     </ItemGroup>
 
-    <ItemGroup Condition=" $(TargetFramework.StartsWith('netstandard')) ">
-        <ProjectReference Include="..\Shiny.Core\Shiny.Core.csproj" />
-        <ProjectReference Include="..\Shiny.Push.Common\Shiny.Push.Common.csproj" />
-        <Compile Include="Platforms\Shared\**\*.cs" />
-    </ItemGroup>
-
-    <ItemGroup Condition=" $(TargetFramework.StartsWith('uap')) ">
-        <ProjectReference Include="..\Shiny.Core\Shiny.Core.csproj" />
-        <ProjectReference Include="..\Shiny.Push.Common\Shiny.Push.Common.csproj" />
-        <Compile Include="Platforms\Shared\**\*.cs" />
-    </ItemGroup>
-
-    <ItemGroup Condition=" $(TargetFramework.StartsWith('xamarin.ios')) ">
-        <ProjectReference Include="..\Shiny.Core\Shiny.Core.csproj" />
-        <ProjectReference Include="..\Shiny.Push.Common\Shiny.Push.Common.csproj" />
-        <Compile Include="Platforms\Shared\**\*.cs" />
-        <Compile Include="Platforms\iOS\**\*.cs" />
-    </ItemGroup>
-
-    <ItemGroup Condition=" $(TargetFramework.StartsWith('monoandroid')) ">
-        <ProjectReference Include="..\Shiny.Core\Shiny.Core.csproj" />
-        <ProjectReference Include="..\Shiny.Push.Common\Shiny.Push.Common.csproj" />
-        <Compile Include="Platforms\Shared\**\*.cs" />
-        <Compile Include="Platforms\Android\**\*.cs" />
-    </ItemGroup>
-
+    <Import Project="Sdk.targets" Sdk="MSBuild.Sdk.Extras" Version="$(MSBuildSdkExtrasVersion)" Condition="'$(UseMSBuild)' == 'true'" />
 </Project>

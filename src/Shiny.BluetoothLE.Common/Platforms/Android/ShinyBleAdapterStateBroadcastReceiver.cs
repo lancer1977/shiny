@@ -1,33 +1,23 @@
 ﻿using System;
-using System.Reactive.Linq;
-using System.Reactive.Subjects;
-using Android.App;
+using System.Threading.Tasks;
 using Android.Bluetooth;
 using Android.Content;
 
+namespace Shiny.BluetoothLE;
 
-namespace Shiny.BluetoothLE
+
+[BroadcastReceiver(
+    Name = "org.shiny.bluetoothle.ShinyBleAdapterStateBroadcastReceiver",
+    Enabled = true,
+    Exported = true
+)]
+public class ShinyBleAdapterStateBroadcastReceiver : ShinyBroadcastReceiver
 {
-    [BroadcastReceiver(
-        Name = "com.shiny.bluetoothle.ShinyBleAdapterStateBroadcastReceiver",
-        Enabled = true,
-        Exported = true
-    )]
-    public class ShinyBleAdapterStateBroadcastReceiver : BroadcastReceiver
+    public static Func<Intent, Task>? Process { get; set; }
+
+    protected override async Task OnReceiveAsync(Context? context, Intent? intent)
     {
-        static readonly Subject<State> stateSubj = new Subject<State>();
-        public static IObservable<State> WhenStateChanged() => stateSubj;
-
-
-        public override void OnReceive(Context? context, Intent? intent)
-        {
-            switch (intent?.Action)
-            {
-                case BluetoothAdapter.ActionStateChanged:
-                    var newState = (State)intent.GetIntExtra(BluetoothAdapter.ExtraState, -1);
-                    stateSubj.OnNext(newState);
-                    break;
-            }
-        }
+        if (Process != null && intent?.Action == BluetoothAdapter.ActionStateChanged)
+            await Process(intent);
     }
 }

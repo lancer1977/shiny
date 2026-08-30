@@ -1,56 +1,73 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFramework>netcoreapp3.1</TargetFramework>
-        <IsPackable>false</IsPackable>
-        <AssemblyName>Tests</AssemblyName>
+        <TargetFrameworks>$(TargetFrameworks);net8.0-android</TargetFrameworks>
+        <TargetFrameworks>$(TargetFrameworks);net8.0-ios</TargetFrameworks>
+        <TargetFrameworks>$(TargetFrameworks);net8.0-maccatalyst</TargetFrameworks>
+        <OutputType>Exe</OutputType>
+        <RootNamespace>Shiny.Tests</RootNamespace>
+        <SingleProject>true</SingleProject>
+        <ImplicitUsings>disable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+
+        <ApplicationTitle>Shiny Tests</ApplicationTitle>
+        <ApplicationId>org.shiny.tests</ApplicationId>
+        <ApplicationIdGuid>59CC0E85-36F6-4D0A-8EC1-573D0FEE56A6</ApplicationIdGuid>
+
+        <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+        <ApplicationVersion>1</ApplicationVersion>
+
+        <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">14.0</SupportedOSPlatformVersion>
+        <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">14.2</SupportedOSPlatformVersion>
+        <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">26.0</SupportedOSPlatformVersion>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
-        <PackageReference Include="Moq" />
-        <PackageReference Include="FluentAssertions" />
-        <PackageReference Include="Microsoft.NET.Test.Sdk" />
-        <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" PrivateAssets="all" />
-        <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" PrivateAssets="all" />
-        <PackageReference Include="xunit" />
-        <PackageReference Include="xunit.runner.visualstudio">
-            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-            <PrivateAssets>all</PrivateAssets>
-        </PackageReference>
+        <MauiIcon Include="Resources\AppIcon\appicon.svg" ForegroundFile="Resources\AppIcon\appiconfg.svg" />
+        <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#512BD4" BaseSize="128,128" />
+
+        <MauiImage Include="Resources\Images\*" />
+        <MauiFont Include="Resources\Fonts\*" />
+        
+        <MauiAsset Include="Resources\Raw\**" LogicalName="%(RecursiveDir)%(Filename)%(Extension)" />
+        <MauiAsset Include="appsettings.json" LogicalName="appsettings.json" />
+        <MauiAsset Include="appsettings.maccatalyst.json" LogicalName="appsettings.maccatalyst.json" />
+        <MauiAsset Include="appsettings.ios.json" LogicalName="appsettings.ios.json" />
+        <MauiAsset Include="appsettings.android.json" LogicalName="appsettings.android.json" />
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="Microsoft.NET.Test.Sdk" />
-        <PackageReference Include="Xamarin.Essentials" />
-        <PackageReference Include="Xamarin.Forms" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="8.0.0" />
+        <PackageReference Include="Microsoft.Maui.Controls" Version="8.0.3" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="$(MicrosoftExtensionsVersion)" />
+        <PackageReference Include="FluentAssertions" Version="6.12.0" />
+        <PackageReference Include="MartinCostello.Logging.XUnit" Version="0.3.0" />
+        <PackageReference Include="Shiny.Xunit.Runners.Maui" Version="1.0.0" />
+    </ItemGroup>
+
+    <ItemGroup>
         <ProjectReference Include="..\..\src\Shiny.Beacons\Shiny.Beacons.csproj" />
         <ProjectReference Include="..\..\src\Shiny.BluetoothLE.Common\Shiny.BluetoothLE.Common.csproj" />
+        <ProjectReference Include="..\..\src\Shiny.BluetoothLE.Hosting\Shiny.BluetoothLE.Hosting.csproj" />
         <ProjectReference Include="..\..\src\Shiny.BluetoothLE\Shiny.BluetoothLE.csproj" />
         <ProjectReference Include="..\..\src\Shiny.Core\Shiny.Core.csproj" />
-        <ProjectReference Include="..\..\src\Shiny.Generators\Shiny.Generators.csproj" />
-        <ProjectReference Include="..\..\src\Shiny.Integrations.Sqlite\Shiny.Integrations.Sqlite.csproj" />
+        <ProjectReference Include="..\..\src\Shiny.Extensions.Configuration\Shiny.Extensions.Configuration.csproj" />
+        <ProjectReference Include="..\..\src\Shiny.Hosting.Maui\Shiny.Hosting.Maui.csproj" />
         <ProjectReference Include="..\..\src\Shiny.Jobs\Shiny.Jobs.csproj" />
-        <ProjectReference Include="..\..\src\Shiny.Locations.Common\Shiny.Locations.Common.csproj" />
         <ProjectReference Include="..\..\src\Shiny.Locations\Shiny.Locations.csproj" />
-        <ProjectReference Include="..\..\src\Shiny.Net.Http\Shiny.Net.Http.csproj" />
         <ProjectReference Include="..\..\src\Shiny.Notifications\Shiny.Notifications.csproj" />
-        <ProjectReference Include="..\..\src\Shiny.Push\Shiny.Push.csproj" />
-        <ProjectReference Include="..\..\src\Shiny.Push.Common\Shiny.Push.Common.csproj" />
-        <ProjectReference Include="..\..\src\Shiny.Push.AzureNotificationHubs\Shiny.Push.AzureNotificationHubs.csproj" />
-        <ProjectReference Include="..\..\src\Shiny.Push.FirebaseMessaging\Shiny.Push.FirebaseMessaging.csproj" />
-        <ProjectReference Include="..\..\src\Shiny.Testing\Shiny.Testing.csproj" />
-        <ProjectReference Include="..\..\src\Shiny\Shiny.csproj" />
+        <ProjectReference Include="..\..\src\Shiny.Support.DeviceMonitoring\Shiny.Support.DeviceMonitoring.csproj" />
+        <ProjectReference Include="..\..\src\Shiny.Support.Repositories\Shiny.Support.Repositories.csproj" />
+        <ProjectReference Include="..\..\src\Shiny.Net.Http\Shiny.Net.Http.csproj" />
+        <ProjectReference Include="..\..\src\Shiny.Logging.Sqlite\Shiny.Logging.Sqlite.csproj" />
+        <!--<ProjectReference Include="..\..\src\Shiny.Logging.AppCenter\Shiny.Logging.AppCenter.csproj" />-->
     </ItemGroup>
 
-    <ItemGroup Condition=" $(OS) == 'WINDOWS_NT' ">
-        <Reference Include="c:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\Common7\IDE\ReferenceAssemblies\Microsoft\Framework\MonoAndroid\v10.0\Mono.Android.dll" />
-        <Reference Include="c:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\Common7\IDE\ReferenceAssemblies\Microsoft\Framework\Xamarin.iOS\v1.0\Xamarin.iOS.dll" />
+    <ItemGroup>
+        <Compile Remove="Push\AbstractPushTests.cs" />
+        <Compile Remove="Push\TestGoogleCredential.cs" />
+        <Compile Remove="Push\FirebaseTests.cs" />
+        <Compile Remove="Push\AppleNativeTests.cs" />
+        <Compile Remove="Push\AzureNotificationHubTests.cs" />
     </ItemGroup>
-
-    <Import Project="..\Shiny.Tests.Shared\Shiny.Tests.Shared.projitems" Label="Shared" />
-
-    <!--<ItemGroup Condition=" $(OS) != 'WINDOWS_NT' ">
-
-    </ItemGroup>-->
 </Project>

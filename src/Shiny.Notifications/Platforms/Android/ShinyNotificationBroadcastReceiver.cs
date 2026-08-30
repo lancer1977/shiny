@@ -1,40 +1,37 @@
-﻿using System;
-using System.Threading.Tasks;
+﻿using System.Threading.Tasks;
 using Android.Content;
 
+namespace Shiny.Notifications;
 
-namespace Shiny.Notifications
+
+[BroadcastReceiver(
+    Name = ReceiverName,
+    Enabled = true,
+    Exported = false
+)]
+public class ShinyNotificationBroadcastReceiver : ShinyBroadcastReceiver
 {
-    [BroadcastReceiver(
-        Name = ReceiverName,
-        Enabled = true,
-        Exported = false
-    )]
-    public class ShinyNotificationBroadcastReceiver : ShinyBroadcastReceiver
+    public const string ReceiverName = "com.shiny.notifications." + nameof(ShinyNotificationBroadcastReceiver);
+    public const string EntryIntentAction = ReceiverName + ".ENTRY_ACTION";
+    public const string AlarmIntentAction = ReceiverName + ".ALARM_ACTION";
+
+
+    protected override async Task OnReceiveAsync(Context? context, Intent? intent)
     {
-        public const string ReceiverName = "com.shiny.notifications." + nameof(ShinyNotificationBroadcastReceiver);
-        public const string EntryIntentAction = ReceiverName + ".ENTRY_ACTION";
-        //public const string AlarmIntentAction = ReceiverName + ".ALARM_ACTION";
-
-
-        protected override async Task OnReceiveAsync(Context? context, Intent? intent)
+        switch (intent?.Action)
         {
-            if (intent?.Action?.Equals(EntryIntentAction) ?? false)
-            {
+            case Intent.ActionBootCompleted:
+                this.Resolve<AndroidNotificationProcessor>().ProcessPending();
+                break;
+
+            case AlarmIntentAction:
+                this.Resolve<AndroidNotificationProcessor>().ProcessAlarm(intent);
+                break;
+
+            case EntryIntentAction:
                 await this.Resolve<AndroidNotificationProcessor>().TryProcessIntent(intent);
-                context?.SendBroadcast(new Intent(Intent.ActionCloseSystemDialogs));
-                //case AlarmIntentAction:
-                //    var notificationId = intent.GetIntExtra("NotificationId", 0);
-                //    if (notificationId > 0)
-                //    {
-                //        var repo = this.Resolve<IRepository>();
-                //        var notification = await repo.Get<Notification>(notificationId.ToString());
-                //        notification.ScheduleDate = null;
-                //        await this.Resolve<INotificationManager>().Send(notification);
-                //        await repo.Remove<Notification>(notificationId.ToString());
-                //    }
-                //    break;
-            }
+                //context?.SendBroadcast(new Intent(Intent.ActionCloseSystemDialogs));
+                break;
         }
     }
 }

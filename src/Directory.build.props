@@ -1,59 +1,124 @@
-<Project>
+﻿<Project>
     <PropertyGroup>
         <Authors>Allan Ritchie</Authors>
         <Owners>aritchie;shinylib</Owners>
         <LangVersion>latest</LangVersion>
         <Nullable>enable</Nullable>
         <DisableExtraReferences>False</DisableExtraReferences>
-        <NoWarn>$(NoWarn);1591;1701;1591;1702;1705;VSX1000;NU1603</NoWarn>
+        <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
         <Description>Shiny</Description>
         <Product>$(AssemblyName) ($(TargetFramework))</Product>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <PackageProjectUrl>https://shinylib.net</PackageProjectUrl>
-        <ShinyVersion Condition=" '$(ShinyVersion)' == '' ">2.4.0</ShinyVersion>
-        <PackageVersion>$(ShinyVersion)</PackageVersion>
         <PackageIcon>icon.png</PackageIcon>
-        <PackageReleaseNotes>https://shinylib.net/release-notes/</PackageReleaseNotes>
-        <PackageTags>xamarin uwp ios android tizen tvos watchos ble bluetooth bluetoothle push notifications sensors geofences gps location backgroundjobs settings environment speech sensors</PackageTags>
+        <PackageReleaseNotes>https://shinylib.net/release-notes/client/v30/</PackageReleaseNotes>
+        <PackageTags>xamarin ios android ble bluetooth bluetoothle push notifications sensors geofences gps location background jobs settings speech sensors</PackageTags>
+        <PackageReadmeFile>readme.md</PackageReadmeFile>
         <RepositoryUrl>https://github.com/shinyorg/shiny</RepositoryUrl>
         <RepositoryType>git</RepositoryType>
-        <!--<DebugType Condition=" $(Configuration) == 'Release' ">embedded</DebugType>
-        <DebugType Condition=" $(Configuration) == 'Debug' ">full</DebugType>-->
-        <DefineConstants Condition=" $(TargetFramework.StartsWith('monoandroid')) ">$(DefineConstants);__ANDROID__</DefineConstants>
-        <DefineConstants Condition=" $(TargetFramework.StartsWith('tizen')) ">$(DefineConstants);__TIZEN__</DefineConstants>
-        <ExtrasUwpMetaPackageVersion>6.2.12</ExtrasUwpMetaPackageVersion>
-        <UwpTargetFramework>uap10.0.17763</UwpTargetFramework>
-        <AndroidTargetFramework>monoandroid10.0</AndroidTargetFramework>
-        <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
-        <PackageReadmeFile>readme.md</PackageReadmeFile>
+
+        <CI Condition="'$(GITHUB_ACTIONS)' == 'true'">true</CI>
+        <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+        <MicrosoftExtensionsVersion>8.0.0</MicrosoftExtensionsVersion>
+        <MauiVersion>8.0.3</MauiVersion>
     </PropertyGroup>
 
-    <PropertyGroup Condition=" $(TargetFramework.StartsWith('netcore')) OR $(TargetFramework.StartsWith('net4')) ">
-        <UseWPF>true</UseWPF>
+    <PropertyGroup>
+        <UseMSBuild Condition="$([MSBuild]::IsOSPlatform('windows'))">true</UseMSBuild>
+        <WindowsTarget Condition="$([MSBuild]::IsOSPlatform('windows'))">net8.0-windows10.0.19041.0</WindowsTarget>
+        <!--<UseMSBuild>false</UseMSBuild>-->
+
+        <StandardTargetFrameworks>net8.0</StandardTargetFrameworks>
+        <StandardTargetFrameworks Condition="'$(CI)' == 'true'">$(StandardTargetFrameworks);netstandard2.1</StandardTargetFrameworks>
+
+        <IosTargetFrameworks>net8.0-ios</IosTargetFrameworks>
+        <IosTargetFrameworks Condition="'$(UseMSBuild)' == 'true'">$(IosTargetFrameworks);xamarin.ios10</IosTargetFrameworks>
+
+        <AndroidTargetFrameworks>net8.0-android</AndroidTargetFrameworks>
+        <AndroidTargetFrameworks Condition="'$(UseMSBuild)' == 'true'">$(AndroidTargetFrameworks);monoandroid13.0</AndroidTargetFrameworks>
+
+        <MauiPlatformTargetFrameworks>net8.0-android;net8.0-ios;net8.0-maccatalyst</MauiPlatformTargetFrameworks>
+        <AppleTargetFrameworks>$(IosTargetFrameworks);net8.0-maccatalyst</AppleTargetFrameworks>
+        <PlatformOnlyTargetFrameworks>$(AppleTargetFrameworks);$(AndroidTargetFrameworks)</PlatformOnlyTargetFrameworks>
+        <DefaultMobileTargetFrameworks>$(StandardTargetFrameworks);$(IosTargetFrameworks);$(AndroidTargetFrameworks)</DefaultMobileTargetFrameworks>
+        <DefaultTargetFrameworks>$(StandardTargetFrameworks);$(PlatformOnlyTargetFrameworks)</DefaultTargetFrameworks>
+
+        <MSBuildSdkExtrasVersion>3.0.44</MSBuildSdkExtrasVersion>
     </PropertyGroup>
 
-    <PropertyGroup Condition="'$(CI)' == 'true'">
-        <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
-    </PropertyGroup>
-
-    <PropertyGroup Condition=" '$(Configuration)' == 'Release' AND '$(OS)' == 'WINDOWS_NT' ">
+    <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+        <IncludeSource>True</IncludeSource>
         <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
-        <IncludeSymbols>True</IncludeSymbols>
-        <IncludeSource>True</IncludeSource>
+        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
         <PublishRepositoryUrl>True</PublishRepositoryUrl>
         <EmbedUntrackedSources>True</EmbedUntrackedSources>
     </PropertyGroup>
 
-    <ItemGroup>
-        <None Include="$(MSBuildThisFileDirectory)nuget.png" Pack="true" PackagePath="icon.png" />
-        <None Include="$(MSBuildThisFileDirectory)nuget.txt" Pack="true" PackagePath="readme.txt" />
-        <None Include="..\..\readme.md" Pack="true" PackagePath="\" />
-        <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />
-    </ItemGroup>
+    <PropertyGroup Condition="$(TargetFramework.Contains('netstandard'))">
+        <IsClassicTarget>true</IsClassicTarget>
+    </PropertyGroup>
 
-    <ItemGroup Condition=" $(TargetFramework.StartsWith('netcore')) OR $(TargetFramework.StartsWith('net4')) ">
-        <PackageReference Include="Microsoft.Windows.SDK.Contracts" />
-    </ItemGroup>
+    <PropertyGroup Condition="$(TargetFramework.Contains('monoandroid'))">
+        <IsAndroidBuild>true</IsAndroidBuild>
+        <IsClassicTarget>true</IsClassicTarget>
+        <DefineConstants>$(DefineConstants);XAMARIN</DefineConstants>
+    </PropertyGroup>
 
+    <PropertyGroup Condition="$(TargetFramework.Contains('-android'))">
+        <SupportedOSPlatformVersion>26.0</SupportedOSPlatformVersion>
+        <TargetPlatformMinVersion>34.0</TargetPlatformMinVersion>
+        <IsAndroidBuild>true</IsAndroidBuild>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(IsAndroidBuild)' == 'true'">
+        <AndroidGenerateResourceDesigner>false</AndroidGenerateResourceDesigner>
+        <AndroidUseIntermediateDesignerFile>false</AndroidUseIntermediateDesignerFile>
+        <DefineConstants>$(DefineConstants);ANDROID;PLATFORM</DefineConstants>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="$(TargetFramework.Contains('xamarin.ios'))">
+        <IsIosBuild>true</IsIosBuild>
+        <IsClassicTarget>true</IsClassicTarget>
+        <DefineConstants>$(DefineConstants);IOS;APPLE;PLATFORM;XAMARIN</DefineConstants>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="$(TargetFramework.Contains('-ios'))">
+        <SupportedOSPlatformVersion>14.0</SupportedOSPlatformVersion>
+        <IsIosBuild>true</IsIosBuild>
+        <DefineConstants>$(DefineConstants);APPLE;PLATFORM</DefineConstants>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="$(TargetFramework.Contains('maccatalyst'))">
+        <SupportedOSPlatformVersion>14.0</SupportedOSPlatformVersion>
+        <TargetPlatformMinVersion>14.0</TargetPlatformMinVersion>
+        <IsIosBuild>true</IsIosBuild>
+        <DefineConstants>$(DefineConstants);APPLE;PLATFORM</DefineConstants>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="$(TargetFramework.Contains('windows'))">
+        <IsWindowsBuild>true</IsWindowsBuild>
+        <DefineConstants>$(DefineConstants);PLATFORM;WINDOWS</DefineConstants>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
+        <IsWebAssembly>true</IsWebAssembly>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <!--
+        <RuntimeIdentifier>browser-wasm</RuntimeIdentifier>
+        <WasmMainJSPath>main.js</WasmMainJSPath>
+		<OutputType>Exe</OutputType>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<PublishTrimmed>true</PublishTrimmed>
+		<TrimMode>full</TrimMode>
+		<RunAOTCompilation>true</RunAOTCompilation>
+        -->
+	</PropertyGroup>
+
+    <Target Name="_DisableRemoteBuildForLibraries" BeforeTargets="BeforeBuild;_SayHello">
+		<PropertyGroup>
+			<IsRemoteBuild>false</IsRemoteBuild>
+			<ServerAddress></ServerAddress>
+		</PropertyGroup>
+	</Target>
 </Project>

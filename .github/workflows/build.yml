@@ -1,4 +1,4 @@
-name: Build
+﻿name: Build
 
 on:
   workflow_dispatch:
@@ -8,18 +8,14 @@ on:
         required: true
         default: 'warning'
   push:
-    branches: [ master, main, dev, preview ]
-    paths:
-    - "src/**"
-    - "docs/**"
-    - "build/**"
-  #pull_request:
-  #  branches: [ master, main, dev ]
-  #  paths:
-  #  - "src/**"
+    branches:
+    - master
+    - main
+    - dev
+    - preview
+    - v*
 
 env:
-  DocsDeployGitHubToken: ${{ secrets.DOCS_GITHUB_TOKEN }}
   NugetApiKey: ${{secrets.NUGETAPIKEY}}
   TwitterConsumerKey: ${{secrets.TWITTER_CONSUMER_KEY}}
   TwitterConsumerSecret: ${{secrets.TWITTER_CONSUMER_SECRET}}
@@ -28,6 +24,9 @@ env:
   DiscordToken: ${{secrets.DISCORD_TOKEN}}
   DiscordGuildId: '679761126598115336'
   DiscordChannelId: '803717285986566174'
+  MastodonClientId: ${{secrets.MASTODON_CLIENT_ID}}
+  MastodonClientSecret: ${{secrets.MASTODON_CLIENT_SECRET}}
+  MastodonInstance: 'dotnet.social'
 
 jobs:
   build:
@@ -35,24 +34,29 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v2
-
-    - name: Setup .NET Core
-      uses: actions/setup-dotnet@v1
+    - name: Checkout
+      uses: actions/checkout@v3
       with:
-        dotnet-version: 5.0.202
+          fetch-depth: 0
 
-    - name: Generate Build Number
-      id: buildnumber
-      uses: einaregilsson/build-number@v3
+    - name: Setup .NET 8.0
+      uses: actions/setup-dotnet@v3
       with:
-        token: ${{secrets.github_token}}
+          dotnet-version: '8.0.x'
+
+    - uses: AdoptOpenJDK/install-jdk@v1
+      with:
+        version: '13'
+        architecture: x64
+
+    - name: Add .NET Workloads
+      run: dotnet workload install maui-ios maui-android maui-maccatalyst maui-windows
 
     - name: Build
-      run: dotnet run --project build/ShinyBuild.csproj --BuildNumber=${{steps.buildnumber.outputs.build_number}}
+      run: dotnet run --project build/ShinyBuild.csproj
 
     - name: Publish Artifacts
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       with:
         name: nugets
         path: ${{ github.workspace }}/artifacts

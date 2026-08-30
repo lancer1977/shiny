@@ -1,89 +1,112 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Threading;
 using System.Threading.Tasks;
-using Shiny.Infrastructure;
-using Shiny.Locations.Infrastructure;
+using Microsoft.Extensions.Logging;
+using Shiny.Support.Repositories;
+
+namespace Shiny.Locations;
 
 
-namespace Shiny.Locations
+public class GpsGeofenceManagerImpl : IGeofenceManager, IShinyStartupTask
 {
-    public class GpsGeofenceManagerImpl : AbstractGeofenceManager, IShinyStartupTask
+    readonly ILogger logger;
+    readonly IRepository repository;
+    readonly IGpsManager gpsManager;
+
+
+    static readonly GpsRequest defaultRequest = new GpsRequest
     {
-        readonly IGpsManager gpsManager;
+        BackgroundMode = GpsBackgroundMode.Realtime,
+        Accuracy = GpsAccuracy.Normal
+    };
+
+    public GpsGeofenceManagerImpl(
+        ILogger<GpsGeofenceManagerImpl> logger,
+        IRepository repository, 
+        IGpsManager gpsManager
+    )
+    {
+        this.logger = logger;
+        this.repository = repository;
+        this.gpsManager = gpsManager;
+    }
 
 
-        static readonly GpsRequest defaultRequest = new GpsRequest
-        {
-            Interval = TimeSpan.FromMinutes(1),
-            BackgroundMode = GpsBackgroundMode.Realtime
-        };
-
-
-        public GpsGeofenceManagerImpl(IRepository repository, IGpsManager gpsManager) : base(repository)
-            => this.gpsManager = gpsManager;
-
-
-        public async void Start()
-        {
-            var restore = await this.GetMonitorRegions();
+    public async void Start()
+    {
+        try 
+        { 
+            var restore = this.repository.GetList<GeofenceRegion>();
             if (restore.Any())
                 await this.TryStartGps();
         }
-
-
-        public override Task<AccessState> RequestAccess()
-            => this.gpsManager.RequestAccess(defaultRequest);
-
-
-        public override async Task<GeofenceState> RequestState(GeofenceRegion region, CancellationToken cancelToken = default)
+        catch (Exception ex) 
         {
-            var reading = await this.gpsManager!
-                .GetLastReading()
-                .Timeout(TimeSpan.FromSeconds(10))
-                .ToTask();
-
-            if (reading == null)
-                return GeofenceState.Unknown;
-
-            var state = region.IsPositionInside(reading.Position)
-                ? GeofenceState.Entered
-                : GeofenceState.Exited;
-
-            return state;
+            this.logger.LogWarning(ex, "Failed to start gps geofencing");
         }
+    }
 
 
-        public override async Task StartMonitoring(GeofenceRegion region)
-        {
-            await this.TryStartGps();
-            await this.Repository.Set(region.Identifier, region);
-        }
+    public AccessState CurrentStatus
+        => this.gpsManager.GetCurrentStatus(defaultRequest);
+
+    public Task<AccessState> RequestAccess()
+        => this.gpsManager.RequestAccess(defaultRequest);
 
 
-        public override async Task StopAllMonitoring()
-        {
-            await this.Repository.Clear();
-            await this.gpsManager.StopListener();
-        }
+    public IList<GeofenceRegion> GetMonitorRegions()
+        => this.repository.GetList<GeofenceRegion>();
 
 
-        public override async Task StopMonitoring(string identifier)
-        {
-            await this.Repository.Remove(identifier);
-            var geofences = await this.Repository.GetAll();
+    public async Task<GeofenceState> RequestState(GeofenceRegion region, CancellationToken cancelToken = default)
+    {
+        var reading = await this.gpsManager!
+            .GetLastReading()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .ToTask();
 
-            if (geofences.Count == 0)
-                await this.gpsManager!.StopListener();
-        }
+        if (reading == null)
+            return GeofenceState.Unknown;
+
+        var state = region.IsPositionInside(reading.Position)
+            ? GeofenceState.Entered
+            : GeofenceState.Exited;
+
+        return state;
+    }
 
 
-        protected async Task TryStartGps()
-        {
-            if (this.gpsManager.CurrentListener == null)
-                await this.gpsManager.StartListener(defaultRequest);
-        }
+    public async Task StartMonitoring(GeofenceRegion region)
+    {
+        await this.TryStartGps().ConfigureAwait(false);
+        this.repository.Set(region);
+    }
+
+
+    public async Task StopAllMonitoring()
+    {
+        this.repository.Clear<GeofenceRegion>();
+        await this.gpsManager.StopListener().ConfigureAwait(false);
+    }
+
+
+    public async Task StopMonitoring(string identifier)
+    {
+        this.repository.Remove<GeofenceRegion>(identifier);
+        var geofences = this.repository.GetList<GeofenceRegion>();
+
+        if (geofences.Count == 0)
+            await this.gpsManager!.StopListener();
+    }
+
+
+    protected async Task TryStartGps()
+    {
+        if (this.gpsManager.CurrentListener == null)
+            await this.gpsManager.StartListener(defaultRequest).ConfigureAwait(false);
     }
 }

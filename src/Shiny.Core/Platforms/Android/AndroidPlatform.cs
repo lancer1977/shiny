@@ -1,317 +1,243 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
+using System.Collections.Generic;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Disposables;
 using System.Threading;
+using System.Threading.Tasks;
+using Android;
 using Android.App;
 using Android.Content;
 using Android.Content.PM;
 using Android.OS;
-using AndroidX.Core.App;
 using AndroidX.Core.Content;
-using AndroidX.Lifecycle;
-using B = global::Android.OS.Build;
-using Microsoft.Extensions.DependencyInjection;
-using Java.Interop;
+using AndroidX.Core.App;
+using Shiny.Hosting;
+using Shiny.Stores;
+using Shiny.Stores.Impl;
+
+namespace Shiny;
 
 
-namespace Shiny
+public partial class AndroidPlatform : IPlatform,
+                                       IAndroidLifecycle.IOnActivityRequestPermissionsResult,
+                                       IAndroidLifecycle.IOnActivityResult
 {
-    public class AndroidPlatform : Java.Lang.Object,
-                                   ILifecycleObserver,
-                                   IAndroidContext,
-                                   IPlatform,
-                                   IPlatformBuilder
+    const string PermissionsKey = nameof(PermissionsKey);
+    int requestCode;
+    readonly List<string> requestedPermissions;
+
+    static AndroidActivityLifecycle activityLifecycle; // this should never change once installed on the platform
+    readonly Subject<PermissionRequestResult> permissionSubject = new();
+    readonly Subject<(int RequestCode, Result Result, Intent Intent)> activityResultSubject = new();
+    readonly SettingsKeyValueStore store;
+
+    public AndroidPlatform()
     {
-        int requestCode;
-        readonly Subject<PlatformState> stateSubj = new Subject<PlatformState>();
-        readonly Subject<Intent> intentSubject = new Subject<Intent>();
-        readonly Subject<PermissionRequestResult> permissionSubject = new Subject<PermissionRequestResult>();
-        readonly Subject<(int RequestCode, Result Result, Intent Intent)> activityResultSubject = new Subject<(int RequestCode, Result Result, Intent Intent)>();
-        readonly Application app;
-        readonly ActivityLifecycleCallbacks callbacks;
+        var app = (Application)Application.Context;
+        activityLifecycle ??= new(app);
+        this.AppContext = app;
+        this.AppData = new DirectoryInfo(this.AppContext.FilesDir.AbsolutePath);
+        this.Cache = new DirectoryInfo(this.AppContext.CacheDir.AbsolutePath);
+        var publicDir = this.AppContext.GetExternalFilesDir(null);
+        if (publicDir != null)
+            this.Public = new DirectoryInfo(publicDir.AbsolutePath);
+
+        this.store = new(this, new DefaultSerializer());
+        this.requestedPermissions = this.store.Get<List<string>>(PermissionsKey) ?? new List<string>();
+    }
+
+    public AccessState GetCurrentPermissionStatus(string androidPermission)
+    {
+        var self = ContextCompat.CheckSelfPermission(this.AppContext, androidPermission);
+        if (self == Permission.Granted)
+            return AccessState.Available;
+
+        if (!this.HasRequestedPermission(androidPermission))
+            return AccessState.Unknown;
+
+        //var showRequest = ActivityCompat.ShouldShowRequestPermissionRationale(this.CurrentActivity!, androidPermission);
+        //if (showRequest)
+        //    return AccessState.Unknown;
+
+        return AccessState.Denied;
+    }
+
+    // lifecycle hooks
+    public void Handle(Activity activity, int requestCode, string[] permissions, Permission[] grantResults)
+        => this.permissionSubject.OnNext(new PermissionRequestResult(requestCode, permissions, grantResults));
+
+    public void Handle(Activity activity, int requestCode, Result resultCode, Intent data)
+        => this.activityResultSubject.OnNext((requestCode, resultCode, data));
 
 
-        public AndroidPlatform(Application app)
+    public Application AppContext { get; }
+    public DirectoryInfo AppData { get; }
+    public DirectoryInfo Cache { get; }
+    public DirectoryInfo Public { get; }
+
+
+    public Activity? CurrentActivity => activityLifecycle.Activity;
+    public IObservable<ActivityChanged> WhenActivityChanged() => activityLifecycle.ActivitySubject;
+
+
+    readonly Handler handler = new Handler(Looper.MainLooper);
+    public void InvokeOnMainThread(Action action)
+    {
+        if (Looper.MainLooper.IsCurrentThread)
+            action();
+        else
+            this.handler.Post(action);
+    }
+
+
+    public IObservable<ActivityChanged> WhenActivityStatusChanged() => Observable.Create<ActivityChanged>(ob =>
+    {
+        if (this.CurrentActivity != null)
+            ob.Respond(new ActivityChanged(this.CurrentActivity, ActivityState.Created, null));
+
+        return activityLifecycle
+            .ActivitySubject
+            .Subscribe(x => ob.Respond(x));
+    });
+
+
+    public async Task<AccessState> RequestForegroundServicePermissions()
+    {
+        if (OperatingSystemShim.IsAndroidVersionAtLeast(33))
         {
-            this.app = app;
-            this.callbacks = new ActivityLifecycleCallbacks();
-            this.app.RegisterActivityLifecycleCallbacks(this.callbacks);
-            ProcessLifecycleOwner.Get().Lifecycle.AddObserver(this);
+            var results = await this.RequestPermissions(
+                Manifest.Permission.ForegroundService,
+                Manifest.Permission.PostNotifications
+            );
+            if (results.IsSuccess())
+                return AccessState.Available;
 
-            this.AppData = new DirectoryInfo(this.AppContext.FilesDir.AbsolutePath);
-            this.Cache = new DirectoryInfo(this.AppContext.CacheDir.AbsolutePath);
-            var publicDir = this.app.GetExternalFilesDir(null);
-            if (publicDir != null)
-                this.Public = new DirectoryInfo(publicDir.AbsolutePath);
+            if (!results.IsGranted(Manifest.Permission.ForegroundService))
+                return AccessState.NotSetup;
+
+            return AccessState.Restricted; // no post_notifications
+        }
+        else if (OperatingSystemShim.IsAndroidVersionAtLeast(31))
+        {
+            var results = await this.RequestPermissions(Manifest.Permission.ForegroundService);
+            if (results.IsSuccess())
+                return AccessState.Available;
+
+            return AccessState.NotSetup;
         }
 
+        return AccessState.Available;
+    }
 
-        public void Register(IServiceCollection services)
+    public const string ActionServiceStart = "ACTION_START_FOREGROUND_SERVICE";
+    public const string ActionServiceStop = "ACTION_STOP_FOREGROUND_SERVICE";
+    public const string IntentActionStopWithTask = "StopWithTask";
+
+    public void StartService(Type serviceType, bool stopWithTask = true)
+    {
+        var intent = new Intent(this.AppContext, serviceType);
+        intent.SetAction(ActionServiceStart);
+        intent.PutExtra(IntentActionStopWithTask, stopWithTask);
+
+        if (OperatingSystemShim.IsAndroidVersionAtLeast(31))
+            this.AppContext.StartForegroundService(intent);
+        else
+            this.AppContext.StartService(intent);
+    }
+
+
+    public void StopService(Type serviceType)
+    {
+        var intent = new Intent(this.AppContext, serviceType);
+        intent.SetAction(ActionServiceStop);
+        this.AppContext.StartService(intent);
+        //this.AppContext.StopService(intent);
+    }
+
+
+    //public AccessState GetCurrentAccessState(string androidPermission)
+    //{
+    //    var result = ContextCompat.CheckSelfPermission(this.AppContext, androidPermission);
+    //    return result == Permission.Granted ? AccessState.Available : AccessState.Denied;
+    //}
+
+
+    public IObservable<AccessState> RequestAccess(string androidPermissions)
+        => this.RequestPermissions(new[] { androidPermissions }).Select(x => x.IsSuccess() ? AccessState.Available : AccessState.Denied);
+
+
+    public IObservable<PermissionRequestResult> RequestPermissions(params string[] androidPermissions) => Observable.Create<PermissionRequestResult>(ob =>
+    {
+        var comp = new CompositeDisposable();
+
+        //https://developer.android.com/training/permissions/requesting
+        var allGood = androidPermissions.All(p => ContextCompat.CheckSelfPermission(this.AppContext, p) == Permission.Granted);
+        if (allGood)
         {
-            services.AddSingleton<IAndroidContext>(this);
-            services.RegisterCommonServices();
+            // everything is already good
+            var grants = Enumerable.Repeat(Permission.Granted, androidPermissions.Length).ToArray();
+            ob.Respond(new PermissionRequestResult(0, androidPermissions, grants));
         }
-
-
-        public string Name => KnownPlatforms.Android;
-        public DirectoryInfo AppData { get; }
-        public DirectoryInfo Cache { get; }
-        public DirectoryInfo Public { get; }
-        public Activity? CurrentActivity => this.callbacks.Activity;
-        public IObservable<ActivityChanged> WhenActivityChanged() => this.callbacks.ActivitySubject;
-
-
-        [Lifecycle.Event.OnResume]
-        [Export]
-        public void OnResume()
+        else
         {
-            this.Status = PlatformState.Foreground;
-            this.stateSubj.OnNext(PlatformState.Foreground);
-        }
-
-
-        [Lifecycle.Event.OnPause]
-        [Export]
-        public void OnPause()
-        {
-            this.Status = PlatformState.Background;
-            this.stateSubj.OnNext(PlatformState.Background);
-        }
-
-
-        public IObservable<PlatformState> WhenStateChanged()
-            => this.stateSubj.OnErrorResumeNext(Observable.Empty<PlatformState>());
-
-
-        readonly Handler handler = new Handler(Looper.MainLooper);
-        public void InvokeOnMainThread(Action action)
-        {
-            if (Looper.MainLooper.IsCurrentThread)
-                action();
-            else
-                handler.Post(action);
-        }
-
-
-        public string AppIdentifier => this.app.PackageName;
-        public string AppVersion => this.Package.VersionName;
-        public string AppBuild => this.Package.VersionCode.ToString();
-
-        public string MachineName => B.GetSerial();
-        public string OperatingSystem => B.VERSION.Release;
-        public string OperatingSystemVersion => B.VERSION.Sdk;
-        public string Manufacturer => B.Manufacturer;
-        public string Model => B.Model;
-
-        public void OnActivityResult(int requestCode, Result resultCode, Intent data) => this.activityResultSubject.OnNext((requestCode, resultCode, data));
-        public void OnNewIntent(Intent intent) => this.intentSubject.OnNext(intent);
-        public Application AppContext => this.app;
-        public IObservable<Intent> WhenIntentReceived() => this.intentSubject;
-        public T GetSystemService<T>(string key) where T : Java.Lang.Object
-            => (T)this.AppContext.GetSystemService(key);
-
-        public PlatformState Status { get; private set; } = PlatformState.Foreground;
-
-
-        public void RegisterBroadcastReceiver<T>(params string[] actions) where T : BroadcastReceiver, new()
-        {
-            var filter = new IntentFilter();
-            foreach (var e in actions)
-                filter.AddAction(e);
-
-            this.AppContext.RegisterReceiver(new T(), filter);
-        }
-
-
-        public TValue GetSystemServiceValue<TValue, TSysType>(string systemTypeName, Func<TSysType, TValue> func) where TSysType : Java.Lang.Object
-        {
-            using (var type = this.GetSystemService<TSysType>(systemTypeName))
-                return func(type);
-        }
-
-
-        public IObservable<ActivityChanged> WhenActivityStatusChanged() => Observable.Create<ActivityChanged>(ob =>
-        {
-            if (this.CurrentActivity != null)
-                ob.Respond(new ActivityChanged(this.CurrentActivity, ActivityState.Created, null));
-
-            return this
-                .callbacks
-                .ActivitySubject
-                .Subscribe(x => ob.Respond(x));
-        });
-
-
-        public PackageInfo Package => this
-            .AppContext
-            .PackageManager
-            .GetPackageInfo(this.AppContext.PackageName, 0);
-
-
-        public const string ActionServiceStart = "ACTION_START_FOREGROUND_SERVICE";
-        public const string ActionServiceStop = "ACTION_STOP_FOREGROUND_SERVICE";
-
-        public void StartService(Type serviceType)
-        {
-            //ActionServiceStart
-            var intent = new Intent(this.AppContext, serviceType);
-            if (this.IsMinApiLevel(26) && this.IsShinyForegroundService(serviceType))
-            {
-                intent.SetAction(ActionServiceStart);
-                this.AppContext.StartForegroundService(intent);
-            }
-            else
-            {
-                this.AppContext.StartService(intent);
-            }
-        }
-
-
-        public void StopService(Type serviceType)
-        {
-            if (!this.IsShinyForegroundService(serviceType))
-            {
-                this.AppContext.StopService(new Intent(this.AppContext, serviceType));
-            }
-            else
-            {
-                // HACK: this re-runs the intent to stop the service since OnTaskRemoved isn't running
-                var intent = new Intent(this.AppContext, serviceType);
-                intent.SetAction(ActionServiceStop);
-                this.AppContext.StartService(intent);
-            }
-        }
-
-
-        protected bool IsShinyForegroundService(Type serviceType)
-            => serviceType?.BaseType.Name.Contains("ShinyAndroidForegroundService") ?? false;
-
-
-        public bool IsMinApiLevel(int apiLevel)
-            => (int)B.VERSION.SdkInt >= apiLevel;
-
-
-        public void OnRequestPermissionsResult(int requestCode, string[] permissions, Permission[] grantResult)
-            => this.permissionSubject.OnNext(new PermissionRequestResult(requestCode, permissions, grantResult));
-
-
-        public T GetIntentValue<T>(string intentAction, Func<Intent, T> transform)
-        {
-            using (var filter = new IntentFilter(intentAction))
-            using (var receiver = this.AppContext.RegisterReceiver(null, filter))
-                return transform(receiver);
-        }
-
-
-        public IObservable<Intent> WhenIntentReceived(string intentAction)
-            => Observable.Create<Intent>(ob =>
-            {
-                var filter = new IntentFilter();
-                filter.AddAction(intentAction);
-                var receiver = new ObservableBroadcastReceiver
-                {
-                    OnEvent = ob.OnNext
-                };
-                this.AppContext.RegisterReceiver(receiver, filter);
-                return () => this.AppContext.UnregisterReceiver(receiver);
-            });
-
-
-        public AccessState GetCurrentAccessState(string androidPermission)
-        {
-            var result = ContextCompat.CheckSelfPermission(this.AppContext, androidPermission);
-            return result == Permission.Granted ? AccessState.Available : AccessState.Denied;
-        }
-
-
-        public IObservable<(Result result, Intent data)> RequestActivityResult(Action<int, Activity> request) => Observable.Create<(Result result, Intent data)>(ob =>
-        {
+            //if (this.Status == PlatformState.Background)
+            //    throw new ApplicationException("You cannot make permission requests while your application is in the background.  Please call RequestAccess in the Shiny library you are using while your app is in the foreground so your user can respond.  You are getting this message because your user has either not granted these permissions or has removed them.");
+            this.SetRequestedPermissions(androidPermissions);
             var current = Interlocked.Increment(ref this.requestCode);
-            var sub = this.activityResultSubject
+            comp.Add(this
+                .permissionSubject
                 .Where(x => x.RequestCode == current)
-                .Subscribe(x => ob.Respond((x.Result, x.Intent)));
+                .Subscribe(x => ob.Respond(x))
+            );
 
-            request(current, this.CurrentActivity);
-
-            return sub;
-        });
-
-
-        public IObservable<PermissionRequestResult> RequestPermissions(params string[] androidPermissions) => Observable.Create<PermissionRequestResult>(ob =>
-        {
-            var comp = new CompositeDisposable();
-
-            //https://developer.android.com/training/permissions/requesting
-            var allGood = androidPermissions.All(p => ContextCompat.CheckSelfPermission(this.AppContext, p) == Permission.Granted);
-            if (allGood)
-            {
-                // everything is already good
-                var grants = Enumerable.Repeat(Permission.Granted, androidPermissions.Length).ToArray();
-                ob.Respond(new PermissionRequestResult(0, androidPermissions, grants));
-            }
-            else
-            {
-                //if (this.Status == PlatformState.Background)
-                //    throw new ApplicationException("You cannot make permission requests while your application is in the background.  Please call RequestAccess in the Shiny library you are using while your app is in the foreground so your user can respond.  You are getting this message because your user has either not granted these permissions or has removed them.");
-
-                var current = Interlocked.Increment(ref this.requestCode);
-                comp.Add(this
-                    .permissionSubject
-                    .Where(x => x.RequestCode == current)
-                    .Subscribe(x => ob.Respond(x))
-                );
-
-                comp.Add(this
-                    .WhenActivityStatusChanged()
-                    .Take(1)
-                    .Subscribe(x =>
-                        ActivityCompat.RequestPermissions(
-                            x.Activity,
-                            androidPermissions,
-                            current
-                        )
-                    )
-                );
-            }
-
-            return comp;
-        });
-
-
-        public IObservable<AccessState> RequestAccess(string androidPermissions)
-            => this.RequestPermissions(new[] { androidPermissions }).Select(x => x.IsSuccess() ? AccessState.Available : AccessState.Denied);
-
-
-        public Intent CreateIntent<T>(params string[] actions)
-        {
-            var intent = new Intent(this.AppContext, typeof(T));
-            foreach (var action in actions)
-                intent.SetAction(action);
-
-            return intent;
+            comp.Add(this
+                .WhenActivityStatusChanged()
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Subscribe(
+                    x => ActivityCompat.RequestPermissions(
+                        x.Activity,
+                        androidPermissions,
+                        current
+                    ),
+                    ex => ob.OnError(new TimeoutException(
+                        "A current activity was not detected to be able to request permissions",
+                        ex
+                    ))
+                )
+            );
         }
 
+        return comp;
+    });
 
-        public bool IsInManifest(string androidPermission)
+    void SetRequestedPermissions(string[] androidPermissions)
+    {
+        lock (this.requestedPermissions)
         {
-            var permissions = this.AppContext
-                .PackageManager
-                .GetPackageInfo(
-                    this.AppContext.PackageName,
-                    PackageInfoFlags.Permissions
-                )
-                ?.RequestedPermissions;
+            var count = this.requestedPermissions.Count;
+            foreach (var p in androidPermissions)
+            {
+                if (!this.requestedPermissions.Contains(p, StringComparer.InvariantCultureIgnoreCase))
+                    this.requestedPermissions.Add(p);
+            }
+            if (count != this.requestedPermissions.Count)
+                this.store.Set(PermissionsKey, this.requestedPermissions);
+        }
+    }
 
-            if (permissions != null)
-                foreach (var permission in permissions)
-                    if (permission.Equals(androidPermission, StringComparison.InvariantCultureIgnoreCase))
-                        return true;
 
-            //Log.Write("Permissions", $"You need to declare the '{androidPermission}' in your AndroidManifest.xml");
-            return false;
+    bool HasRequestedPermission(string androidPermission)
+    {
+        lock (this.requestedPermissions)
+        {
+            return this.requestedPermissions.Contains(
+                androidPermission,
+                StringComparer.InvariantCultureIgnoreCase
+            );
         }
     }
 }

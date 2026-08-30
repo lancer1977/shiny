@@ -1,14 +1,12 @@
-﻿using System;
-using Cake.Frosting;
+﻿using Cake.Frosting;
 using ShinyBuild.Tasks.Library;
 
+namespace ShinyBuild.Tasks;
 
-namespace ShinyBuild.Tasks
-{
-    [TaskName("Default")]
-    [IsDependentOn(typeof(CopyArtifactsTask))]
-    [IsDependentOn(typeof(NugetDeployTask))]
-    [IsDependentOn(typeof(DocTask))]
-    [IsDependentOn(typeof(ReleaseAnnouncementTask))]
-    public sealed class DefaultTarget : FrostingTask<BuildContext> { }
-}
+
+[TaskName("Default")]
+[IsDependentOn(typeof(CopyArtifactsTask))]
+[IsDependentOn(typeof(NugetDeployTask))]
+[IsDependentOn(typeof(ReleaseAnnouncementTask))]
+//[IsDependentOn(typeof(GitHubReleaseTask))]
+public sealed class DefaultTarget : FrostingTask<BuildContext> { }
