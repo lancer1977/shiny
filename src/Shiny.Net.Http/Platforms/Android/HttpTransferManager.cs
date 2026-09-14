@@ -1,159 +1,137 @@
 ﻿using System;
-using System.IO;
-using System.Reactive.Linq;
-using System.Reactive.Disposables;
 using System.Collections.Generic;
+using System.IO;
+using System.Reactive.Disposables;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
-using System.Net.Http;
 using Microsoft.Extensions.Logging;
-using Android;
-using Android.Content;
-using Observable = System.Reactive.Linq.Observable;
-using Native = Android.App.DownloadManager;
-using Shiny.Infrastructure;
-using Shiny.Jobs;
+using Shiny.Support.Repositories;
+
+namespace Shiny.Net.Http;
 
 
-namespace Shiny.Net.Http
+public class HttpTransferManager : IHttpTransferManager, IShinyStartupTask
 {
-    public class HttpTransferManager : HttpClientHttpTransferManager
+    readonly AndroidPlatform platform;
+    readonly ILogger logger;
+    readonly IRepository repository;
+
+
+    public HttpTransferManager(
+        AndroidPlatform platform,
+        ILogger<HttpTransferManager> logger,
+        IRepository repository
+    )
     {
-        IObservable<HttpTransfer>? httpObs;
-        public HttpTransferManager(
-            ShinyCoreServices services,
-            IJobManager jobManager,
-            ILogger<IHttpTransferManager> logger
-        ) : base(
-            services,
-            jobManager,
-            logger
-        ) {}
+        this.platform = platform;
+        this.logger = logger;
+        this.repository = repository;
+    }
 
 
-        public override void Start()
+    public void Start()
+    {
+        try
         {
-            this.Services.Android.RegisterBroadcastReceiver<HttpTransferBroadcastReceiver>(
-                Native.ActionDownloadComplete,
-                Intent.ActionBootCompleted
-            );
+            if (HttpTransferService.IsStarted)
+                return;
+
+            var transfers = this.repository.GetList<HttpTransfer>();
+            if (transfers.Count > 0)
+                this.TryStartService();
         }
-
-
-        public override async Task Cancel(string identifier)
+        catch (Exception ex)
         {
-            await base.Cancel(identifier);
-            if (Int64.TryParse(identifier, out var id))
-                this.Services
-                    .Android
-                    .GetManager()
-                    .Remove(id);
+            this.logger.LogError(ex, "Failed to auto-start HTTP Transfer Manager");
         }
+    }
 
 
+    public Task<IList<HttpTransfer>> GetTransfers()
+    {
+        var transfers = this.repository.GetList<HttpTransfer>();
+        return Task.FromResult(transfers);
+    }
 
-        public override IObservable<HttpTransfer> WhenUpdated()
+
+    public async Task<HttpTransfer> Queue(HttpTransferRequest request)
+    {
+        request.AssertValid();
+        (await this.platform.RequestForegroundServicePermissions()).Assert(allowRestricted: true);
+        if (OperatingSystemShim.IsAndroidVersionAtLeast(34))
         {
-            var query = new QueryFilter().ToNative();
-
-            this.httpObs ??= Observable
-                .Create<HttpTransfer>(ob =>
-                {
-                    var lastRun = DateTime.UtcNow;
-                    var disposer = new CompositeDisposable();
-
-                    HttpTransferBroadcastReceiver
-                        .HttpEvents
-                        .Subscribe(ob.OnNext)
-                        .DisposedBy(disposer);
-
-                    Observable
-                        .Interval(TimeSpan.FromSeconds(2))
-                        .Subscribe(_ =>
-                        {
-                            using (var cursor = this.Services.Android.GetManager().InvokeQuery(query))
-                            {
-                                while (cursor.MoveToNext())
-                                {
-                                    var lastModEpoch = cursor.GetLong(cursor.GetColumnIndex(Native.ColumnLastModifiedTimestamp));
-                                    var epoch = DateTimeOffset.FromUnixTimeMilliseconds(lastModEpoch);
-                                    if (epoch > lastRun)
-                                    {
-                                        var transfer = cursor.ToLib();
-                                        ob.OnNext(transfer);
-                                    }
-                                }
-                            }
-
-                            lastRun = DateTime.UtcNow;
-                        })
-                        .DisposedBy(disposer);
-
-                    return disposer;
-                })
-                .Publish()
-                .RefCount();
-
-            return this.httpObs.Merge(base.WhenUpdated());
+            (await this.platform.RequestAccess("android.permission.FOREGROUND_SERVICE_DATA_SYNC").ToTask()).Assert();
         }
+        // this will trigger over to the job if it is running
+        long? contentLength = null;
+        if (request.IsUpload)
+            contentLength = new FileInfo(request.LocalFilePath).Length;
+
+        var transfer = new HttpTransfer(
+            request,
+            contentLength,
+            0,
+            HttpTransferState.Pending,
+            DateTimeOffset.UtcNow
+        );
+        this.repository.Insert(transfer);
+        this.TryStartService();
+
+        return transfer;
+    }
 
 
-        protected override async Task<HttpTransfer> CreateDownload(HttpTransferRequest request)
+    public Task Cancel(string identifier)
+    {
+        // this will trigger over to the foreground service which will shut itself down if there are no other transfers
+        var transfer = this.repository.Get<HttpTransfer>(identifier);
+        if (transfer != null)
         {
-            if (request.HttpMethod != HttpMethod.Get)
-                throw new ArgumentException("Only GETs are supported for downloads on Android");
+            this.repository.Remove(transfer);
 
-            var access = await this.Services.Android.RequestAccess(Manifest.Permission.WriteExternalStorage);
-            if (access != AccessState.Available)
-                throw new ArgumentException("Invalid access to external storage - " + access);
-
-            access = await this.Services.Android.RequestAccess(Manifest.Permission.ReadExternalStorage);
-            if (access != AccessState.Available)
-                throw new ArgumentException("Invalid access to external storage - " + access);
-
-            var dlPath = Android.OS.Environment.GetExternalStoragePublicDirectory(Android.OS.Environment.DirectoryDownloads).AbsolutePath;
-            var path = Path.Combine(dlPath, request.LocalFile.Name);
-
-            var native = new Native
-                .Request(Android.Net.Uri.Parse(request.Uri))
-                .SetDescription(request.LocalFile.FullName)
-                .SetDestinationUri(ToNativeUri(path)) // WRITE_EXTERNAL_STORAGE
-                .SetAllowedOverMetered(request.UseMeteredConnection);
-
-            foreach (var header in request.Headers)
-                native.AddRequestHeader(header.Key, header.Value);
-
-            var id = this.Services.Android.GetManager().Enqueue(native);
-            return new HttpTransfer(
-                id.ToString(),
-                request.Uri,
-                request.LocalFile.FullName,
-                false,
-                request.UseMeteredConnection,
-                null,
-                0,
-                0,
-                HttpTransferState.Pending
-            );
+            this.resultSubj.OnNext(new(
+                transfer.Request,
+                HttpTransferState.Canceled,
+                TransferProgress.Empty,
+                null
+            ));
         }
+        return Task.CompletedTask;
+    }
 
 
-        protected override Task<IEnumerable<HttpTransfer>> GetDownloads(QueryFilter filter)
-            => Task.FromResult(this.GetAll(filter));
+    public Task CancelAll()
+    {
+        // this will trigger over to the foreground service which will shut itself down
+        this.repository.Clear<HttpTransfer>();
+        return Task.CompletedTask;
+    }
 
 
-        IEnumerable<HttpTransfer> GetAll(QueryFilter filter)
-        {
-            var query = filter.ToNative();
-            using (var cursor = this.Services.Android.GetManager().InvokeQuery(query))
-                while (cursor.MoveToNext())
-                    yield return cursor.ToLib();
-        }
+    public IObservable<int> WatchCount() => this.repository.CreateCountWatcher<HttpTransfer>();
+
+    readonly Subject<HttpTransferResult> resultSubj = new();
+    public IObservable<HttpTransferResult> WhenUpdateReceived() => Observable.Create<HttpTransferResult>(ob =>
+    {
+        var disposer = new CompositeDisposable();
+        this.resultSubj
+            .Subscribe(ob.OnNext)
+            .DisposedBy(disposer);
+
+        HttpTransferProcess
+            .WhenProgress()
+            .Subscribe(ob.OnNext)
+            .DisposedBy(disposer);
+
+        return disposer;
+    });
 
 
-        static Android.Net.Uri ToNativeUri(string filePath)
-        {
-            var native = new Java.IO.File(filePath);
-            return Android.Net.Uri.FromFile(native);
-        }
+    void TryStartService()
+    {
+        if (!HttpTransferService.IsStarted)
+            this.platform.StartService(typeof(HttpTransferService), true);
     }
 }

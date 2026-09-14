@@ -5,269 +5,300 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
 using Android.Bluetooth;
-using Java.Util;
+using Java.Lang.Annotation;
 using Shiny.BluetoothLE.Hosting.Internals;
 
+namespace Shiny.BluetoothLE.Hosting;
 
-namespace Shiny.BluetoothLE.Hosting
+
+public class GattCharacteristic : IGattCharacteristic, IGattCharacteristicBuilder, IDisposable
 {
-    public class GattCharacteristic : IGattCharacteristic, IGattCharacteristicBuilder, IDisposable
+    readonly GattServerContext context;
+    readonly CompositeDisposable disposer = new();
+    readonly Dictionary<string, IPeripheral> subscribers = new();
+    Func<CharacteristicSubscription, Task>? onSubscribe;
+    Func<WriteRequest, Task>? onWrite;
+    Func<ReadRequest, Task<GattResult>>? onRead;
+    GattProperty properties = 0;
+    GattPermission permissions = 0;
+
+
+    public GattCharacteristic(GattServerContext context, string uuid)
     {
-        readonly GattServerContext context;
-        readonly CompositeDisposable disposer;
-        readonly IDictionary<string, IPeripheral> subscribers;
-        Action<CharacteristicSubscription> onSubscribe;
-        Func<WriteRequest, GattState> onWrite;
-        Func<ReadRequest, ReadResult> onRead;
-        GattProperty properties = 0;
-        GattPermission permissions = 0;
+        this.context = context;
+        this.Uuid = uuid;
+    }
 
 
-        public GattCharacteristic(GattServerContext context, string uuid)
+    public BluetoothGattCharacteristic Native { get; private set; } = null!;
+    public string Uuid { get; }
+    public CharacteristicProperties Properties => (CharacteristicProperties)(int)this.properties;
+    public IReadOnlyList<IPeripheral> SubscribedCentrals
+    {
+        get
         {
-            this.subscribers = new Dictionary<string, IPeripheral>();
-            this.disposer = new CompositeDisposable();
-            this.context = context;
-            this.Uuid = uuid;
-        }
-
-
-        public BluetoothGattCharacteristic Native { get; private set; }
-        public string Uuid { get; }
-        public CharacteristicProperties Properties { get; }
-        public IReadOnlyList<IPeripheral> SubscribedCentrals
-        {
-            get
+            lock (this.subscribers)
             {
-                lock (this.subscribers)
+                return this.subscribers.Values.ToList();
+            }
+        }
+    }
+
+
+    public Task Notify(byte[] data, params IPeripheral[] centrals)
+    {
+        this.Native.SetValue(data);
+        var sendTo = (centrals.OfType<Peripheral>() ?? this.SubscribedCentrals.OfType<Peripheral>()).ToArray();
+
+        foreach (var send in sendTo)
+        {
+            // TODO: exception on false?
+            this.context.Server.NotifyCharacteristicChanged(send.Native, this.Native, false);
+        }
+        return Task.CompletedTask;
+    }
+
+
+    public IGattCharacteristicBuilder SetNotification(Func<CharacteristicSubscription, Task>? onSubscribe = null, NotificationOptions options = NotificationOptions.Notify)
+    {
+        this.onSubscribe = onSubscribe;
+        if (options.HasFlag(NotificationOptions.Indicate))
+            this.properties |= GattProperty.Indicate;
+
+        if (options.HasFlag(NotificationOptions.Notify))
+            this.properties |= GattProperty.Notify;
+
+        return this;
+    }
+
+
+    public IGattCharacteristicBuilder SetWrite(Func<WriteRequest, Task> onWrite, WriteOptions options = WriteOptions.Write)
+    {
+        this.onWrite = onWrite;
+        if (options.HasFlag(WriteOptions.EncryptionRequired))
+        {
+            this.permissions = GattPermission.WriteEncrypted;
+        }
+        else if (options.HasFlag(WriteOptions.AuthenticatedSignedWrites))
+        {
+            this.properties |= GattProperty.SignedWrite;
+            this.permissions |= GattPermission.WriteSigned;
+        }
+        else
+        {
+            this.properties |= GattProperty.Write;
+            this.permissions |= GattPermission.Write;
+        }
+        if (options.HasFlag(WriteOptions.WriteWithoutResponse))
+            this.properties |= GattProperty.WriteNoResponse;
+
+        return this;
+    }
+
+
+    public IGattCharacteristicBuilder SetRead(Func<ReadRequest, Task<GattResult>> onRead, bool encrypted = false)
+    {
+        this.onRead = onRead;
+        this.properties |= GattProperty.Read;
+        if (encrypted)
+            this.permissions |= GattPermission.ReadEncrypted;
+        else
+            this.permissions |= GattPermission.Read;
+
+        return this;
+    }
+
+
+    public void Build()
+    {
+        var nativeUuid = Utils.ToUuidType(this.Uuid);
+
+        this.Native = new BluetoothGattCharacteristic(
+            nativeUuid,
+            this.properties,
+            this.permissions
+        );
+
+        this.SetupNotifications();
+        this.SetupRead();
+        this.SetupWrite();
+    }
+
+
+    public void Dispose() => this.disposer.Dispose();
+
+
+    void SetupNotifications()
+    {
+        if (this.onSubscribe == null)
+            return;
+
+        var ndesc = new BluetoothGattDescriptor(
+            Constants.NotifyDescriptorUuid,
+            GattDescriptorPermission.Read | GattDescriptorPermission.Write
+        );
+        this.Native.AddDescriptor(ndesc);
+
+        this.context
+            .DescriptorWrite
+            .Where(x => x.Descriptor.Equals(ndesc))
+            .Subscribe(async x =>
+            {
+                var respond = true;
+                if (x.Value.SequenceEqual(Constants.IndicateEnableBytes) || x.Value.SequenceEqual(Constants.NotifyEnableBytes))
                 {
-                    return this.subscribers.Values.ToList();
+                    var peripheral = this.GetOrAdd(x.Device);
+                    await this.onSubscribe(new CharacteristicSubscription(this, peripheral, true)).ConfigureAwait(false);
                 }
-            }
-        }
-
-
-        public Task Notify(byte[] data, params IPeripheral[] centrals)
-        {
-            this.Native.SetValue(data);
-            var sendTo = (centrals.OfType<Peripheral>() ?? this.SubscribedCentrals.OfType<Peripheral>()).ToArray();
-
-            foreach (var send in sendTo)
-            {
-                this.context.Server.NotifyCharacteristicChanged(send.Native, this.Native, false);
-            }
-            return Task.CompletedTask;
-        }
-
-
-        public IGattCharacteristicBuilder SetNotification(Action<CharacteristicSubscription> onSubscribe = null, NotificationOptions options = NotificationOptions.Notify)
-        {
-            this.onSubscribe = onSubscribe;
-            if (options.HasFlag(NotificationOptions.Indicate))
-                this.properties |= GattProperty.Indicate;
-
-            if (options.HasFlag(NotificationOptions.Notify))
-                this.properties |= GattProperty.Notify;
-
-            return this;
-        }
-
-
-        public IGattCharacteristicBuilder SetWrite(Func<WriteRequest, GattState> onWrite, WriteOptions options = WriteOptions.Write)
-        {
-            this.onWrite = onWrite;
-            if (options.HasFlag(WriteOptions.EncryptionRequired))
-            {
-                this.permissions = GattPermission.WriteEncrypted;
-            }
-            else if (options.HasFlag(WriteOptions.AuthenticatedSignedWrites))
-            {
-                this.properties |= GattProperty.SignedWrite;
-                this.permissions |= GattPermission.WriteSigned;
-            }
-            else
-            {
-                this.properties |= GattProperty.Write;
-                this.permissions |= GattPermission.Write;
-            }
-            if (options.HasFlag(WriteOptions.WriteWithoutResponse))
-                this.properties |= GattProperty.WriteNoResponse;
-
-            return this;
-        }
-
-
-        public IGattCharacteristicBuilder SetRead(Func<ReadRequest, ReadResult> onRead, bool encrypted = false)
-        {
-            this.onRead = onRead;
-            this.properties |= GattProperty.Read;
-            if (encrypted)
-                this.permissions |= GattPermission.ReadEncrypted;
-            else
-                this.permissions |= GattPermission.Read;
-
-            return this;
-        }
-
-
-        public void Build()
-        {
-            var nativeUuid = Utils.ToUuidType(this.Uuid);
-
-            this.Native = new BluetoothGattCharacteristic(
-                nativeUuid,
-                this.properties,
-                this.permissions
-            );
-
-            this.SetupNotifications();
-            this.SetupRead();
-            this.SetupWrite();
-        }
-
-
-        public void Dispose() => this.disposer.Dispose();
-
-
-        void SetupNotifications()
-        {
-            if (this.onSubscribe == null)
-                return;
-
-            var ndesc = new BluetoothGattDescriptor(
-                Constants.NotifyDescriptorUuid,
-                GattDescriptorPermission.Read | GattDescriptorPermission.Write
-            );
-            this.Native.AddDescriptor(ndesc);
-
-            this.context
-                .DescriptorWrite
-                .Where(x => x.Descriptor.Equals(ndesc))
-                .Subscribe(x =>
-                {
-                    var respond = true;
-                    if (x.Value.SequenceEqual(Constants.IndicateEnableBytes) || x.Value.SequenceEqual(Constants.NotifyEnableBytes))
-                    {
-                        var peripheral = this.GetOrAdd(x.Device);
-                        this.onSubscribe(new CharacteristicSubscription(this, peripheral, true));
-                    }
-                    else if (x.Value.SequenceEqual(Constants.NotifyDisableBytes))
-                    {
-                        var peripheral = this.Remove(x.Device);
-                        if (peripheral != null)
-                            this.onSubscribe(new CharacteristicSubscription(this, peripheral, false));
-                    }
-                    else
-                        respond = false;
-
-                    if (respond && x.ResponseNeeded)
-                    {
-                        this.context.Server.SendResponse(
-                            x.Device,
-                            x.RequestId,
-                            GattStatus.Success,
-                            0,
-                            new byte[] { 0x1 }
-                        );
-                    }
-                })
-                .DisposedBy(this.disposer);
-
-            this.context
-                .ConnectionStateChanged
-                .Where(x => x.NewState == ProfileState.Disconnected)
-                .Subscribe(x =>
+                else if (x.Value.SequenceEqual(Constants.NotifyDisableBytes))
                 {
                     var peripheral = this.Remove(x.Device);
                     if (peripheral != null)
-                        this.onSubscribe(new CharacteristicSubscription(this, peripheral, false));
-                })
-                .DisposedBy(this.disposer);
-        }
-
-
-        void SetupRead()
-        {
-            if (this.onRead == null)
-                return;
-
-            this.context
-                .CharacteristicRead
-                .Where(x => x.Characteristic.Equals(this.Native))
-                .Subscribe(ch =>
+                        await this.onSubscribe(new CharacteristicSubscription(this, peripheral, false)).ConfigureAwait(false);
+                }
+                else
+                { 
+                    respond = false;
+                }
+                if (respond && x.ResponseNeeded)
                 {
-                    var peripheral = new Peripheral(ch.Device);
-                    var request = new ReadRequest(this, peripheral, ch.Offset);
-                    var result = this.onRead(request);
-
-                    this.context.Server.SendResponse
-                    (
-                        ch.Device,
-                        ch.RequestId,
-                        result.Status.ToNative(),
-                        ch.Offset,
-                        result.Data
+                    this.context.Server.SendResponse(
+                        x.Device,
+                        x.RequestId,
+                        GattStatus.Success,
+                        0,
+                        new byte[] { 0x1 }
                     );
-                })
-                .DisposedBy(this.disposer);
-        }
+                }
+            })
+            .DisposedBy(this.disposer);
+
+        this.context
+            .ConnectionStateChanged
+            .Where(x => x.NewState == ProfileState.Disconnected)
+            .Subscribe(async x =>
+            {
+                var peripheral = this.Remove(x.Device);
+                if (peripheral != null)
+                    await this.onSubscribe(new CharacteristicSubscription(this, peripheral, false)).ConfigureAwait(false);
+            })
+            .DisposedBy(this.disposer);
+    }
 
 
-        void SetupWrite()
-        {
-            if (this.onWrite == null)
-                return;
+    void SetupRead()
+    {
+        if (this.onRead == null)
+            return;
 
-            this.context
-                .CharacteristicWrite
-                .Where(x => x.Characteristic.Equals(this.Native))
-                .Subscribe(ch =>
-                {
-                    var peripheral = new Peripheral(ch.Device);
-                    var request = new WriteRequest(this, peripheral, ch.Value, ch.Offset, ch.ResponseNeeded);
-                    var state = this.onWrite(request);
+        this.context
+            .CharacteristicRead
+            .Where(x => x.Characteristic.Equals(this.Native))
+            .Subscribe(async ch =>
+            {
+                var peripheral = new Peripheral(ch.Device);
+                var request = new ReadRequest(this, peripheral, ch.Offset);
+                var result = await this.onRead(request).ConfigureAwait(false);
 
-                    if (request.IsReplyNeeded)
+                this.context.Server.SendResponse
+                (
+                    ch.Device,
+                    ch.RequestId,
+                    result.Status.ToNative(),
+                    ch.Offset,
+                    result.Data!
+                );
+            })
+            .DisposedBy(this.disposer);
+    }
+
+
+    void SetupWrite()
+    {
+        if (this.onWrite == null)
+            return;
+
+        this.context
+            .CharacteristicWrite
+            .Where(x => x.Characteristic.Equals(this.Native))
+            .Subscribe(async ch =>
+            {
+                var responded = false;
+                var peripheral = new Peripheral(ch.Device);
+                var request = new WriteRequest(
+                    this,
+                    peripheral,
+                    ch.Value,
+                    ch.Offset,
+                    ch.ResponseNeeded,
+                    (status) =>
                     {
+                        responded = true;
                         this.context.Server.SendResponse(
                             ch.Device,
                             ch.RequestId,
-                            state.ToNative(),
+                            status.ToNative(),
                             ch.Offset,
                             ch.Value
                         );
                     }
-                })
-                .DisposedBy(this.disposer);
-        }
+                );
+                await this.onWrite(request).ConfigureAwait(false);
+                if (request.IsReplyNeeded && !responded)
+                {
+                    this.context.Server.SendResponse(
+                        ch.Device,
+                        ch.RequestId,
+                        GattStatus.Success,
+                        ch.Offset,
+                        ch.Value
+                    );
+                }
+            })
+            .DisposedBy(this.disposer);
+    }
 
 
-        IPeripheral GetOrAdd(BluetoothDevice native)
-        {
-            lock (this.subscribers)
+    void SetupMtuChanged()
+    {
+        this.context
+            .MtuChanged
+            .Where(x => this.subscribers.ContainsKey(x.Device.Address!))
+            .Subscribe(ch =>
             {
-                if (this.subscribers.ContainsKey(native.Address))
-                    return this.subscribers[native.Address];
+                var peripheral = this.subscribers[ch.Device.Address!] as Peripheral;
+                if (peripheral != null)
+                    peripheral.Mtu = ch.Mtu;
+            })
+            .DisposedBy(this.disposer);
+    }
 
-                var device = new Peripheral(native);
-                this.subscribers.Add(native.Address, device);
+
+    IPeripheral GetOrAdd(BluetoothDevice native)
+    {
+        lock (this.subscribers)
+        {
+            if (this.subscribers.ContainsKey(native.Address!))
+                return this.subscribers[native.Address!];
+
+            var device = new Peripheral(native);
+            this.subscribers.Add(native.Address!, device);
+            return device;
+        }
+    }
+
+
+    IPeripheral? Remove(BluetoothDevice native)
+    {
+        lock (this.subscribers)
+        {
+            if (this.subscribers.ContainsKey(native.Address!))
+            {
+                var device = this.subscribers[native.Address!];
+                this.subscribers.Remove(native.Address!);
                 return device;
             }
-        }
-
-
-        IPeripheral Remove(BluetoothDevice native)
-        {
-            lock (this.subscribers)
-            {
-                if (this.subscribers.ContainsKey(native.Address))
-                {
-                    var device = this.subscribers[native.Address];
-                    this.subscribers.Remove(native.Address);
-                    return device;
-                }
-                return null;
-            }
+            return null;
         }
     }
 }

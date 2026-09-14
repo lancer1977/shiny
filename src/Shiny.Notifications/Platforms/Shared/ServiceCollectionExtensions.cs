@@ -1,78 +1,82 @@
 ﻿using System;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Shiny.Notifications;
 
+namespace Shiny;
 
-namespace Shiny
+
+public static class ServiceCollectionExtensions
 {
-    public static class ServiceCollectionExtensions
+#if IOS || MACCATALYST
+    /// <summary>
+    /// Registers notification manager with Shiny
+    /// </summary>
+    /// <param name="services"></param>
+    /// <param name="configuration"></param>
+    /// <returns></returns>
+    public static IServiceCollection AddNotifications<TDelegate>(this IServiceCollection services, IosConfiguration? configuration = null) where TDelegate : INotificationDelegate
+        => services.AddNotifications(typeof(TDelegate), configuration);
+
+
+    /// <summary>
+    /// Registers notification manager with Shiny
+    /// </summary>
+    /// <param name="services"></param>
+    /// <param name="delegateType"></param>
+    /// <param name="configuration"></param>
+    /// <returns></returns>
+    public static IServiceCollection AddNotifications(this IServiceCollection services, Type? delegateType = null, IosConfiguration? configuration = null)
     {
-        /// <summary>
-        /// Registers notification manager with Shiny
-        /// </summary>
-        /// <param name="services"></param>
-        /// <param name="delegateType"></param>
-        /// <param name="androidConfig">Android specific default configuration</param>
-        /// <param name="channels">WARNING: This will replace all current channels with this set</param>
-        /// <returns></returns>
-        public static bool UseNotifications(this IServiceCollection services,
-                                            Type? delegateType,
-                                            AndroidOptions? androidConfig = null,
-                                            params Channel[] channels)
-        {
-#if NETSTANDARD
-            return false;
-#else
-            services.RegisterModule(new NotificationModule(
-                delegateType,
-                androidConfig,
-                channels
-            ));
-            return true;
-#endif
-        }
+        services.AddSingleton(configuration ?? new());
+        services.AddShinyService<NotificationManager>();
 
+        services.AddDefaultRepository();
+        if (!services.HasService<IChannelManager>())
+            services.AddShinyService<ChannelManager>();
 
-        /// <summary>
-        /// Registers notification manager with Shiny
-        /// </summary>
-        /// <typeparam name="TNotificationDelegate"></typeparam>
-        /// <param name="services"></param>
-        /// <param name="androidConfig">Android specific default configuration</param>
-        /// <param name="channels">WARNING: This will replace all current channels with this set</param>
-        /// <returns></returns>
-        public static bool UseNotifications<TNotificationDelegate>(this IServiceCollection services,
-                                                                   AndroidOptions? androidConfig = null,
-                                                                   params Channel[] channels)
-                where TNotificationDelegate : class, INotificationDelegate
-            => services.UseNotifications(
-                typeof(TNotificationDelegate),
-                androidConfig,
-                channels
-            );
+        if (delegateType != null)
+            services.AddShinyService(delegateType);
 
-
-        /// <summary>
-        /// Registers notification manager with Shiny
-        /// </summary>
-        /// <param name="services"></param>
-        /// <param name="androidConfig">Android specific default configuration</param>
-        /// <param name="channels">WARNING: This will replace all current channels with this set</param>
-        /// <returns></returns>
-        public static bool UseNotifications(this IServiceCollection services,
-                                            AndroidOptions? androidConfig = null,
-                                            params Channel[] channels)
-        {
-#if NETSTANDARD
-            return false;
-#else
-            services.RegisterModule(new NotificationModule(
-                null,
-                androidConfig,
-                channels
-            ));
-            return true;
-#endif
-        }
+        return services;
     }
+#endif
+
+#if ANDROID
+
+    /// <summary>
+    /// Registers notification manager with Shiny
+    /// </summary>
+    /// <param name="services"></param>
+    /// <param name="options"></param>
+    /// <returns></returns>
+    public static IServiceCollection AddNotifications<TDelegate>(this IServiceCollection services) where TDelegate : INotificationDelegate
+        => services.AddNotifications(typeof(TDelegate));
+
+
+    /// <summary>
+    /// Registers notification manager with Shiny
+    /// </summary>
+    /// <param name="services"></param>
+    /// <param name="delegateType"></param>
+    /// <param name="options"></param>
+    /// <returns></returns>
+    public static IServiceCollection AddNotifications(this IServiceCollection services, Type? delegateType = null)
+    {
+        services.AddGeofencing<NotificationGeofenceDelegate>();
+        services.TryAddSingleton<AndroidNotificationProcessor>();
+        services.TryAddSingleton<AndroidNotificationManager>();
+        services.AddShinyService<NotificationManager>();
+
+        services.AddDefaultRepository();
+        if (!services.HasService<IChannelManager>())
+            services.AddShinyService<ChannelManager>();
+
+        if (delegateType != null)
+            services.AddShinyService(delegateType);
+
+        return services;
+    }
+
+#endif
 }

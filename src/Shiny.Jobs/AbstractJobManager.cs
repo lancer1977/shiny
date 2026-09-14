@@ -1,256 +1,243 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Shiny.Infrastructure;
-using Shiny.Jobs.Infrastructure;
+using Shiny.Stores;
+using Shiny.Support.Repositories;
+
+namespace Shiny.Jobs;
 
 
-namespace Shiny.Jobs
+public abstract class AbstractJobManager : IJobManager
 {
-    public abstract class AbstractJobManager : IJobManager
+    readonly Subject<JobRunResult> jobFinished = new();
+    readonly Subject<JobInfo> jobStarted = new();
+    readonly IRepository repository;
+    readonly IObjectStoreBinder storeBinder;
+    readonly IServiceProvider container;
+
+
+    protected AbstractJobManager(
+        IServiceProvider container,
+        IRepository repository,
+        IObjectStoreBinder storeBinder,
+        ILogger<IJobManager> logger
+    )
     {
-        readonly IRepository repository;
-        readonly IServiceProvider container;
-        readonly Subject<JobRunResult> jobFinished;
-        readonly Subject<JobInfo> jobStarted;
+        this.container = container;
+        this.repository = repository;
+        this.storeBinder = storeBinder;
+        this.Log = logger;
+    }
 
 
-        protected AbstractJobManager(IServiceProvider container, IRepository repository, ILogger<IJobManager> logger)
+    protected ILogger<IJobManager> Log { get; }
+    public abstract Task<AccessState> RequestAccess();
+    protected abstract void RegisterNative(JobInfo jobInfo);
+    protected abstract void CancelNative(JobInfo jobInfo);
+
+
+    public virtual async void RunTask(string taskName, Func<CancellationToken, Task> task)
+    {
+        try
         {
-            this.container = container;
-            this.repository = repository;
-            this.Log = logger;
-            this.jobStarted = new Subject<JobInfo>();
-            this.jobFinished = new Subject<JobRunResult>();
+            this.LogTask(JobState.Start, taskName);
+            await task(CancellationToken.None).ConfigureAwait(false);
+            this.LogTask(JobState.Finish, taskName);
         }
-
-
-        protected ILogger<IJobManager> Log { get; }
-        public abstract Task<AccessState> RequestAccess();
-        protected abstract void RegisterNative(JobInfo jobInfo);
-        protected abstract void CancelNative(JobInfo jobInfo);
-
-
-        public virtual async void RunTask(string taskName, Func<CancellationToken, Task> task)
+        catch (Exception ex)
         {
-            try
-            {
-                this.LogTask(JobState.Start, taskName);
-                await task(CancellationToken.None).ConfigureAwait(false);
-                this.LogTask(JobState.Finish, taskName);
-            }
-            catch (Exception ex)
-            {
-                this.LogTask(JobState.Error, taskName, ex);
-            }
+            this.LogTask(JobState.Error, taskName, ex);
         }
+    }
 
 
-        public virtual async Task<JobRunResult> Run(string jobName, CancellationToken cancelToken)
+    public virtual async Task<JobRunResult> Run(string jobName, CancellationToken cancelToken)
+    {
+        JobRunResult result;
+        JobInfo? actual = null;
+        try
         {
-            JobRunResult result;
-            JobInfo? actual = null;
-            try
-            {
-                var job = await this.repository
-                    .Get<PersistJobInfo>(jobName)
-                    .ConfigureAwait(false);
+            var job = this.repository.Get<JobInfo>(jobName);
 
-                if (job == null)
-                    throw new ArgumentException("No job found named " + jobName);
-
-                actual = PersistJobInfo.FromPersist(job);
-                result = await this.RunJob(actual, cancelToken).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                this.Log.LogError(ex, "Error running job " + jobName);
-                result = new JobRunResult(actual, ex);
-            }
-
-            return result;
-        }
-
-
-        public async Task<IEnumerable<JobInfo>> GetJobs()
-        {
-            var jobs = await this.repository.GetAll<PersistJobInfo>().ConfigureAwait(false);
-            return jobs.Select(PersistJobInfo.FromPersist);
-        }
-
-
-        public async Task<JobInfo?> GetJob(string jobName)
-        {
-            var job = await this.repository.Get<PersistJobInfo>(jobName).ConfigureAwait(false);
             if (job == null)
-                return null;
+                throw new ArgumentException("No job found named " + jobName);
 
-            return PersistJobInfo.FromPersist(job);
+            result = await this.RunJob(job, cancelToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            this.Log.LogError(ex, "Error running job " + jobName);
+            result = new JobRunResult(actual, ex);
         }
 
+        return result;
+    }
 
-        public async Task Cancel(string jobIdentifier)
+
+    public IList<JobInfo> GetJobs()
+        => this.repository.GetList<JobInfo>();
+
+
+    public JobInfo? GetJob(string jobIdentifier)
+        => this.repository.Get<JobInfo>(jobIdentifier);
+
+
+    public void Cancel(string jobIdentifier)
+    {
+        var job = this.repository.Get<JobInfo>(jobIdentifier);
+        if (job != null)
         {
-            var job = await this.repository.Get<PersistJobInfo>(jobIdentifier).ConfigureAwait(false);
-            if (job != null)
+            this.CancelNative(job);
+            this.repository.Remove<JobInfo>(jobIdentifier);
+        }
+    }
+
+
+    public virtual void CancelAll()
+    {
+        var jobs = this.repository.GetList<JobInfo>();
+        foreach (var job in jobs)
+        {
+            if (!job.IsSystemJob)
             {
-                this.CancelNative(PersistJobInfo.FromPersist(job));
-                await this.repository.Remove<PersistJobInfo>(jobIdentifier).ConfigureAwait(false);
+                this.CancelJob(job);
             }
         }
+    }
 
 
-        public virtual async Task CancelAll()
+    void CancelJob(JobInfo job)
+    {
+        this.CancelNative(job);
+        this.repository.Remove<JobInfo>(job.Identifier);
+    }
+
+
+    public bool IsRunning { get; protected set; }
+    public TimeSpan? MinimumAllowedPeriodicTime { get; }
+    public IObservable<JobInfo> JobStarted => this.jobStarted;
+    public IObservable<JobRunResult> JobFinished => this.jobFinished;
+
+
+    public void Register(JobInfo jobInfo)
+    {
+        if (jobInfo.JobType == null)
+            throw new ArgumentException("JobType is null");
+
+        this.RegisterNative(jobInfo);
+        this.repository.Set(jobInfo);
+    }
+
+
+    public async Task<IEnumerable<JobRunResult>> RunAll(CancellationToken cancelToken, bool runSequentially)
+    {
+        var list = new List<JobRunResult>();
+
+        if (!this.IsRunning)
         {
-            var jobs = await this.repository.GetAllWithKeys<PersistJobInfo>().ConfigureAwait(false);
-            foreach (var job in jobs)
-            {
-                if (!job.Value.IsSystemJob)
-                {
-                    this.CancelNative(PersistJobInfo.FromPersist(job.Value));
-                    await this.repository.Remove<PersistJobInfo>(job.Key).ConfigureAwait(false);
-                }
-            }
-        }
-
-
-        public bool IsRunning { get; protected set; }
-        public TimeSpan? MinimumAllowedPeriodicTime { get; }
-        public IObservable<JobInfo> JobStarted => this.jobStarted;
-        public IObservable<JobRunResult> JobFinished => this.jobFinished;
-
-
-        public async Task Register(JobInfo jobInfo)
-        {
-            this.ResolveJob(jobInfo);
-            this.RegisterNative(jobInfo);
-            await this.repository.Set(jobInfo.Identifier, PersistJobInfo.ToPersist(jobInfo));
-        }
-
-
-        public async Task<IEnumerable<JobRunResult>> RunAll(CancellationToken cancelToken, bool runSequentially)
-        {
-            var list = new List<JobRunResult>();
-
-            if (!this.IsRunning)
-            {
-                try
-                {
-                    this.IsRunning = true;
-                    var jobs = await this.repository.GetAll<PersistJobInfo>();
-                    var tasks = new List<Task<JobRunResult>>();
-
-                    if (runSequentially)
-                    {
-                        foreach (var job in jobs)
-                        {
-                            var actual = PersistJobInfo.FromPersist(job);
-                            var result = await this
-                                .RunJob(actual, cancelToken)
-                                .ConfigureAwait(false);
-                            list.Add(result);
-                        }
-                    }
-                    else
-                    {
-                        foreach (var job in jobs)
-                        {
-                            var actual = PersistJobInfo.FromPersist(job);
-                            tasks.Add(this.RunJob(actual, cancelToken));
-                        }
-
-                        await Task
-                            .WhenAll(tasks)
-                            .ConfigureAwait(false);
-                        list.AddRange(tasks.Select(x => x.Result));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    this.Log.LogError(ex, "Error running job batch");
-                }
-                finally
-                {
-                    this.IsRunning = false;
-                }
-            }
-            return list;
-        }
-
-
-        protected async Task<JobRunResult> RunJob(JobInfo job, CancellationToken cancelToken)
-        {
-            this.jobStarted.OnNext(job);
-            var result = default(JobRunResult);
-            var cancel = false;
-
             try
             {
-                this.LogJob(JobState.Start, job);
-                var jobDelegate = this.ResolveJob(job);
+                this.IsRunning = true;
+                var jobs = this.repository.GetList<JobInfo>();
+                var tasks = new List<Task<JobRunResult>>();
 
-                await jobDelegate
-                    .Run(job, cancelToken)
-                    .ConfigureAwait(false);
-
-                if (!job.Repeat)
+                if (runSequentially)
                 {
-                    await this.Cancel(job.Identifier);
-                    cancel = true;
+                    foreach (var job in jobs)
+                    {
+                        var result = await this
+                            .RunJob(job, cancelToken)
+                            .ConfigureAwait(false);
+                        list.Add(result);
+                    }
                 }
-                this.LogJob(JobState.Finish, job);
-                result = new JobRunResult(job, null);
+                else
+                {
+                    foreach (var job in jobs)
+                    {
+                        tasks.Add(this.RunJob(job, cancelToken));
+                    }
+
+                    await Task
+                        .WhenAll(tasks)
+                        .ConfigureAwait(false);
+                    list.AddRange(tasks.Select(x => x.Result));
+                }
             }
             catch (Exception ex)
             {
-                this.LogJob(JobState.Error, job, ex);
-                result = new JobRunResult(job, ex);
+                this.Log.LogError(ex, "Error running job batch");
             }
             finally
             {
-                if (!cancel)
-                {
-                    job.LastRunUtc = DateTime.UtcNow;
-                    await this.repository.Set(job.Identifier, PersistJobInfo.ToPersist(job));
-                }
+                this.IsRunning = false;
             }
-            this.jobFinished.OnNext(result);
-            return result;
         }
+        return list;
+    }
 
 
-        protected virtual IJob ResolveJob(JobInfo jobInfo)
+    protected async Task<JobRunResult> RunJob(JobInfo job, CancellationToken cancelToken)
+    {
+        this.jobStarted.OnNext(job);
+        var result = default(JobRunResult);
+        IJob? jobDelegate = null;
+
+        try
         {
-            var type = Type.GetType(jobInfo.TypeName);
-            if (type == null)
-                throw new ArgumentException($"Job '{jobInfo.Identifier}' - Job type '{jobInfo.TypeName}' not found - did you delete / move this class from your library?");
+            this.LogJob(JobState.Start, job);
 
-            return (IJob)ActivatorUtilities.GetServiceOrCreateInstance(this.container, type);
+            jobDelegate = (IJob)ActivatorUtilities.GetServiceOrCreateInstance(this.container, job.JobType);
+            if (jobDelegate is INotifyPropertyChanged npc)
+                this.storeBinder.Bind(npc);
+
+            await jobDelegate
+                .Run(job, cancelToken)
+                .ConfigureAwait(false);
+
+            this.LogJob(JobState.Finish, job);
+            result = new JobRunResult(job, null);
         }
-
-
-        protected virtual void LogJob(JobState state,
-                                      JobInfo job,
-                                      Exception? exception = null)
+        catch (Exception ex)
         {
-            if (exception == null)
-                this.Log.LogInformation(state == JobState.Finish ? "Job Success" : $"Job {state}", ("JobName", job.Identifier));
-            else
-                this.Log.LogError(exception, "Error running job " + job.Identifier);
+            this.LogJob(JobState.Error, job, ex);
+            result = new JobRunResult(job, ex);
         }
-
-
-        protected virtual void LogTask(JobState state, string taskName, Exception? exception = null)
+        finally
         {
-            if (exception == null)
-                this.Log.LogInformation(state == JobState.Finish ? "Task Success" : $"Task {state}", ("TaskName", taskName));
-            else
-                this.Log.LogError(exception, "Task failed - " + taskName);
+            if (jobDelegate is INotifyPropertyChanged npc)
+                this.storeBinder.UnBind(npc);
         }
+
+        this.jobFinished.OnNext(result);
+        return result;
+    }
+
+
+    protected virtual void LogJob(
+        JobState state,
+        JobInfo job,
+        Exception? exception = null
+    )
+    {
+        if (exception == null)
+            this.Log.LogInformation(state == JobState.Finish ? "Job Success" : $"Job {state}", ("JobName", job.Identifier));
+        else
+            this.Log.LogError(exception, "Error running job " + job.Identifier);
+    }
+
+
+    protected virtual void LogTask(JobState state, string taskName, Exception? exception = null)
+    {
+        if (exception == null)
+            this.Log.LogInformation(state == JobState.Finish ? "Task Success" : $"Task {state}", ("TaskName", taskName));
+        else
+            this.Log.LogError(exception, "Task failed - " + taskName);
     }
 }

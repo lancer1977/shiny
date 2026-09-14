@@ -1,11 +1,6 @@
-﻿using System;
+﻿namespace ShinyBuild;
 
-
-namespace ShinyBuild
+public static class Constants
 {
-    public static class Constants
-    {
-        public const string MajorMinorVersion = "2.3.0";
-        public const string DefaultBuildConfiguration = "Release";
-    }
+    public const string DefaultBuildConfiguration = "Release";
 }

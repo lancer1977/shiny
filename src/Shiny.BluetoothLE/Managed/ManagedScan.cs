@@ -1,168 +1,83 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Linq;
 using System.Reactive.Concurrency;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using System.Threading.Tasks;
 
+namespace Shiny.BluetoothLE.Managed;
 
-namespace Shiny.BluetoothLE.Managed
+
+public class ManagedScan : IDisposable, IManagedScan
 {
-    public class ManagedScan : IDisposable, IManagedScan
+    readonly Subject<(ManagedScanListAction Action, ManagedScanResult? ScanResult)> actionSubj = new();
+    readonly ObservableList<ManagedScanResult> list = new();
+    readonly object syncLock = new();
+    readonly IBleManager bleManager;
+    CompositeDisposable? disposer;
+
+
+    public ManagedScan(IBleManager bleManager)
+        => this.bleManager = bleManager;
+
+
+    public IEnumerable<IPeripheral> GetConnectedPeripherals() => this.list
+        .ToList()
+        .Where(x => x.Peripheral.Status == ConnectionState.Connected)
+        .Select(x => x.Peripheral);
+
+
+    public IObservable<(ManagedScanListAction Action, ManagedScanResult? ScanResult)> WhenScan() => this.actionSubj;
+
+    public INotifyReadOnlyCollection<ManagedScanResult> Peripherals => this.list;
+    public bool IsScanning { get; private set; }
+    public TimeSpan BufferTimeSpan { get; private set; }
+    public ScanConfig? ScanConfig { get; private set; }
+    public IScheduler? Scheduler { get; private set; }
+    public TimeSpan? ClearTime { get; private set; }
+
+
+    public async Task Start(
+        ScanConfig? scanConfig = null,
+        Func<ScanResult, bool>? predicate = null,
+        IScheduler? scheduler = null,
+        TimeSpan? bufferTime = null,
+        TimeSpan? clearTime = null
+    )
     {
-        readonly Subject<(ManagedScanListAction Action, ManagedScanResult? ScanResult)> actionSubj;
-        readonly IBleManager bleManager;
-        IDisposable? scanSub;
-        IDisposable? clearSub;
+        if (this.IsScanning)
+            throw new InvalidOperationException("A scan is already running");
 
+        this.ScanConfig = scanConfig;
+        this.Scheduler = scheduler;
+        this.BufferTimeSpan = bufferTime ?? TimeSpan.FromSeconds(3);
+        this.ClearTime = clearTime;
 
-        public ManagedScan(IBleManager bleManager,
-                           ScanConfig? scanConfig = null,
-                           IScheduler? scheduler = null,
-                           TimeSpan? clearTime = null)
-        {
-            this.actionSubj = new Subject<(ManagedScanListAction Action, ManagedScanResult? ScanResult)>();
-            this.bleManager = bleManager;
+        var access = await this.bleManager
+            .RequestAccess()
+            .ToTask()
+            .ConfigureAwait(false);
 
-            this.scanConfig = scanConfig;
-            this.scheduler = scheduler;
-            this.clearTime = clearTime;
-        }
+        access.Assert();
+        this.list.Clear();
+        this.actionSubj.OnNext((ManagedScanListAction.Clear, null));
+        this.disposer = new();
 
-
-        public IEnumerable<IPeripheral> GetConnectedPeripherals() => this.Peripherals
-            .ToList()
-            .Where(x => x.Peripheral.IsConnected())
-            .Select(x => x.Peripheral);
-
-
-        public IObservable<(ManagedScanListAction Action, ManagedScanResult? ScanResult)> WhenScan() => this.actionSubj;
-        public ObservableCollection<ManagedScanResult> Peripherals { get; } = new ObservableCollection<ManagedScanResult>();
-        public bool IsScanning { get; private set; }
-        public TimeSpan BufferTimeSpan { get; set; } = TimeSpan.FromSeconds(3);
-
-
-        ScanConfig? scanConfig;
-        public ScanConfig? ScanConfig
-        {
-            get => this.scanConfig;
-            set => this.Flip(() => this.scanConfig = value);
-        }
-
-
-        IScheduler? scheduler;
-        public IScheduler? Scheduler
-        {
-            get => this.scheduler;
-            set => this.Flip(() => this.scheduler = value);
-        }
-
-
-        TimeSpan? clearTime;
-        public TimeSpan? ClearTime
-        {
-            get => this.clearTime;
-            set
-            {
-                this.clearTime = value;
-                this.clearSub?.Dispose();
-
-                if (value != null)
+        this.bleManager
+            .Scan(this.ScanConfig)
+            .Buffer(this.BufferTimeSpan)
+            .Where(x => x?.Any() ?? false)
+            .ObserveOnIf(this.Scheduler)
+            .Subscribe(
+                scanResults =>
                 {
-                    this.clearSub = Observable
-                        .Interval(TimeSpan.FromSeconds(10))
-                        .ObserveOnIf(this.Scheduler)
-                        .Synchronize(this.Peripherals)
-                        .Subscribe(
-                            _ =>
-                            {
-                                var maxAge = DateTimeOffset.UtcNow.Subtract(value.Value);
-                                var tmp = this.Peripherals.Where(x => x.LastSeen < maxAge).ToList();
-
-                                foreach (var p in tmp)
-                                {
-                                    this.Peripherals.Remove(p);
-                                    this.actionSubj.OnNext((ManagedScanListAction.Remove, p));
-                                }
-                            },
-                            ex =>
-                            {
-                                this.actionSubj.OnError(ex);
-                                this.Stop();
-                            }
-                        );
-                }
-            }
-        }
-
-
-        public async Task Start()
-        {
-            if (this.IsScanning)
-                return;
-
-            var access = await this.bleManager
-                .RequestAccess()
-                .ToTask()
-                .ConfigureAwait(false);
-
-            access.Assert();
-            this.Stop();
-            this.StartInternal();
-        }
-
-
-        public void Dispose()
-        {
-            this.Stop();
-            this.Peripherals.Clear();
-        }
-
-
-        public void Stop()
-        {
-            this.IsScanning = false;
-            this.clearSub?.Dispose();
-            this.scanSub?.Dispose();
-            this.scanSub = null;
-        }
-
-
-        void Flip(Action action)
-        {
-            var wasScanning = this.IsScanning;
-            this.Stop();
-            action();
-            if (wasScanning)
-                this.StartInternal();
-        }
-
-
-        void StartInternal()
-        {
-            // restart clear timer if set
-            this.ClearTime = this.ClearTime;
-            if (this.Peripherals.Count > 0)
-            {
-                this.Peripherals.Clear();
-                this.actionSubj.OnNext((ManagedScanListAction.Clear, null));
-            }
-
-            this.scanSub = this.bleManager
-                .Scan(this.ScanConfig)
-                .Do(_ => this.IsScanning = true)
-                .Buffer(this.BufferTimeSpan)
-                .Where(x => x?.Any() ?? false)
-                .ObserveOnIf(this.Scheduler)
-                .Finally(() => this.Stop())
-                .Synchronize(this.Peripherals)
-                .Subscribe(
-                    scanResults =>
+                    foreach (var scanResult in scanResults)
                     {
-                        foreach (var scanResult in scanResults)
+                        var show = predicate?.Invoke(scanResult!) ?? true;
+                        if (show)
                         {
                             var action = ManagedScanListAction.Update;
                             var result = this.Peripherals.FirstOrDefault(x => x.Peripheral.Equals(scanResult.Peripheral));
@@ -174,7 +89,8 @@ namespace Shiny.BluetoothLE.Managed
                                     ServiceUuids = scanResult.AdvertisementData?.ServiceUuids,
                                     ServiceData = scanResult.AdvertisementData?.ServiceData
                                 };
-                                this.Peripherals.Add(result);
+                                lock (this.syncLock)
+                                    this.list.Add(result);
                             }
                             result.IsConnectable = scanResult.AdvertisementData?.IsConnectable;
                             result.ManufacturerData = scanResult.AdvertisementData?.ManufacturerData;
@@ -185,9 +101,54 @@ namespace Shiny.BluetoothLE.Managed
                             result.LastSeen = DateTimeOffset.UtcNow;
                             this.actionSubj.OnNext((action, result));
                         }
+                    }
+                },
+                this.actionSubj.OnError
+            )
+            .DisposedBy(this.disposer);
+
+        this.IsScanning = true;
+
+
+        if (clearTime != null)
+        {
+            Observable
+                .Interval(TimeSpan.FromSeconds(10))
+                .ObserveOnIf(this.Scheduler)
+                .Subscribe(
+                    _ =>
+                    {
+                        var maxAge = DateTimeOffset.UtcNow.Subtract(clearTime.Value);
+                        var tmp = this.Peripherals.Where(x => x.LastSeen < maxAge).ToList();
+
+                        foreach (var p in tmp)
+                        {
+                            this.actionSubj.OnNext((ManagedScanListAction.Remove, p));
+                            lock (this.syncLock)
+                                this.list.Remove(p);
+                        }
                     },
-                    this.actionSubj.OnError
-                );
+                    ex =>
+                    {
+                        this.actionSubj.OnError(ex);
+                        this.Stop();
+                    }
+                )
+                .DisposedBy(this.disposer);
         }
+    }
+
+
+    public void Dispose()
+    {
+        this.Stop();
+        this.list.Clear();
+    }
+
+
+    public void Stop()
+    {
+        this.disposer?.Dispose();
+        this.IsScanning = false;
     }
 }

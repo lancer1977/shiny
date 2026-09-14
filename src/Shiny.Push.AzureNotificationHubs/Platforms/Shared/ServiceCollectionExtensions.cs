@@ -1,49 +1,46 @@
-﻿using System;
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Shiny.Push;
-using Shiny.Push.AzureNotificationHubs;
+
+namespace Shiny;
 
 
-namespace Shiny
+public static class ServiceCollectionExtensions
 {
-    public static class ServiceCollectionExtensions
+    public static IServiceCollection AddPushAzureNotificationHubs(this IServiceCollection services, string listenerConnectionString, string hubName)
     {
-        public static bool UsePushAzureNotificationHubs(this IServiceCollection services,
-                                                        Type delegateType,
-                                                        AzureNotificationConfig config)
-        {
-#if NETSTANDARD
-            return false;
-#else
-            services.AddSingleton(config);
-            services.RegisterModule(new PushModule(
-                typeof(PushManager),
-                delegateType
-            ));
-            return true;
-#endif
-        }
-
-
-        public static bool UsePushAzureNotificationHubs(this IServiceCollection services,
-                                                        Type delegateType,
-                                                        string listenerConnectionString,
-                                                        string hubName)
-            => services.UsePushAzureNotificationHubs(delegateType, new AzureNotificationConfig(listenerConnectionString, hubName));
-
-
-        public static bool UsePushAzureNotificationHubs<TPushDelegate>(this IServiceCollection services,
-                                                                       string listenerConnectionString,
-                                                                       string hubName)
-            where TPushDelegate : class, IPushDelegate
-            => services.UsePushAzureNotificationHubs(
-                typeof(TPushDelegate),
-                listenerConnectionString,
-                hubName
-            );
-
-
-        public static bool UsePushAzureNotificationHubs<TPushDelegate>(this IServiceCollection services, AzureNotificationConfig config)
-            => services.UsePushAzureNotificationHubs(typeof(TPushDelegate), config);
+        services.AddPush();
+        services.AddSingleton(new AzureNotificationConfig(listenerConnectionString, hubName));
+        services.AddShinyService<AzureNotificationHubsPushProvider>();
+        return services;
     }
+
+
+    public static IServiceCollection AddPushAzureNotificationHubs<TPushDelegate>(this IServiceCollection services, string listenerConnectionString, string hubName)
+        where TPushDelegate : class, IPushDelegate
+    {
+        services.AddShinyService<TPushDelegate>();
+        services.AddPushAzureNotificationHubs(listenerConnectionString, hubName);
+        return services;
+    }
+
+#if ANDROID
+
+    public static IServiceCollection AddPushAzureNotificationHubs(this IServiceCollection services, string listenerConnectionString, string hubName, FirebaseConfig firebaseConfig)
+    {
+        services.AddPush(firebaseConfig);
+        services.AddSingleton(new AzureNotificationConfig(listenerConnectionString, hubName));
+        services.AddShinyService<AzureNotificationHubsPushProvider>();
+        return services;
+    }
+
+
+    public static IServiceCollection AddPushAzureNotificationHubs<TPushDelegate>(this IServiceCollection services, string listenerConnectionString, string hubName, FirebaseConfig firebaseConfig)
+        where TPushDelegate : class, IPushDelegate
+    {
+        services.AddPush<TPushDelegate>(firebaseConfig);
+        services.AddSingleton(new AzureNotificationConfig(listenerConnectionString, hubName));
+        services.AddShinyService<AzureNotificationHubsPushProvider>();
+        return services;
+    }
+#endif
 }

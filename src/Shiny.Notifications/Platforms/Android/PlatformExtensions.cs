@@ -1,74 +1,62 @@
-﻿using Android.App;
-using Android.Content;
-using Shiny.Infrastructure;
-using Shiny.Notifications;
+﻿using System;
+using System.IO;
+using Android.Graphics;
+using AndroidX.Core.App;
+using AndroidX.Core.Content;
+
+namespace Shiny.Notifications;
 
 
-namespace Shiny
+public static class PlatformExtensions
 {
-    static class PlatformExtensions
+    public static int GetColorResourceId(this AndroidPlatform platform, string colorResourceName)
     {
-        internal static ActivityFlags ToNative(this AndroidActivityFlags flags)
+        var colorResourceId = platform.GetColorByName(colorResourceName);
+        if (colorResourceId <= 0)
+            throw new ArgumentException($"Color ResourceId for {colorResourceName} not found");
+
+        return ContextCompat.GetColor(platform.AppContext, colorResourceId);
+    }
+
+
+    public static int GetSmallIconResource(this AndroidPlatform platform, string? resourceName)
+    {
+        if (resourceName.IsEmpty())
         {
-            var intValue = (int) flags;
-            var native = (ActivityFlags) intValue;
-            return native;
+            var id = platform.GetResourceIdByName("notification");
+            if (id > 0)
+                return id;
+
+            id = platform.AppContext.ApplicationInfo!.Icon;
+            if (id > 0)
+                return id;
+
+            throw new InvalidOperationException("Default notification icon not found - you need to create an android resource named notification or set the application icon");
         }
+        var smallIconResourceId = platform.GetResourceIdByName(resourceName!);
+        if (smallIconResourceId <= 0)
+            throw new ArgumentException($"Icon ResourceId for {resourceName} not found");
+
+        return smallIconResourceId;
+    }
 
 
-        const string AndroidBadgeCountKey = "AndroidBadge";
-
-
-        internal static int GetBadgeCount(this ShinyCoreServices core)
-            => core.Settings.Get(AndroidBadgeCountKey, 0);
-
-        internal static void SetBadgeCount(this ShinyCoreServices core, int value)
+    public static void TrySetLargeIconResource(this AndroidPlatform platform, string? largeIconResourceName, NotificationCompat.Builder builder)
+    {
+        if (!largeIconResourceName.IsEmpty())
         {
-            core.Settings.Set(AndroidBadgeCountKey, value);
-
-            if (value <= 0)
-                global::XamarinShortcutBadger.ShortcutBadger.RemoveCount(core.Android.AppContext);
-            else
-                global::XamarinShortcutBadger.ShortcutBadger.ApplyCount(core.Android.AppContext, value);
-
+            var iconId = platform.GetResourceIdByName(largeIconResourceName!);
+            if (iconId > 0)
+                builder.SetLargeIcon(BitmapFactory.DecodeResource(platform.AppContext.Resources, iconId));
         }
-
-        internal static NotificationImportance ToNative(this ChannelImportance importance) => importance switch
-        {
-            ChannelImportance.Critical => NotificationImportance.Max,
-            ChannelImportance.High => NotificationImportance.High,
-            ChannelImportance.Normal => NotificationImportance.Default,
-            ChannelImportance.Low => NotificationImportance.Low
-        };
+    }
 
 
-        internal static int GetColorByName(this IAndroidContext context, string colorName) => context
-            .AppContext
-            .Resources
-            .GetIdentifier(
-                colorName,
-                "color",
-                context.AppContext.PackageName
-            );
-
-        internal static int GetResourceIdByName(this IAndroidContext context, string iconName) => context
-            .AppContext
-            .Resources
-            .GetIdentifier(
-                iconName,
-                "drawable",
-                context.AppContext.PackageName
-            );
-
-
-        // Expects raw resource name like "notify_sound" or "raw/notify_sound"
-        internal static int GetRawResourceIdByName(this IAndroidContext context, string rawName) => context
-            .AppContext
-            .Resources
-            .GetIdentifier(
-                rawName,
-                "raw",
-                context.AppContext.PackageName
-            );
+    public static void TrySetImage(this NotificationCompat.Builder builder, string localAttachmentFilePath)
+    {
+        using var stream = File.OpenRead(localAttachmentFilePath);
+        
+        var bitmap = BitmapFactory.DecodeStream(stream);
+        builder.SetStyle(new NotificationCompat.BigPictureStyle().BigPicture(bitmap));
     }
 }

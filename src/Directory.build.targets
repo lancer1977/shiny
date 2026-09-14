@@ -1,0 +1,49 @@
+<Project>
+    <ItemGroup>
+        <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+        <PackageReference Include="Nerdbank.GitVersioning" Version="3.6.133" PrivateAssets="All" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="Platforms\**\*.cs" />
+        <Compile Remove="Platforms\**\*.cs" />
+
+        <None Include="$(MSBuildThisFileDirectory)nuget.png" Pack="true" PackagePath="icon.png" />
+        <None Include="$(MSBuildThisFileDirectory)nuget.txt" Pack="true" PackagePath="readme.txt" />
+        <None Include="..\..\readme.md" Pack="true" PackagePath="\" />
+    </ItemGroup>
+
+    <ItemGroup Condition="$(TargetFramework.Contains('netstandard'))">
+        <Compile Include="Platforms\NetStandard\**\*.cs" />
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(IsClassicTarget)' == 'true'">
+        <Compile Include="$(MSBuildThisFileDirectory)IsExternalInit.cs" />
+        <!--<PackageReference Include="System.Threading.Tasks.Extensions" Version="4.5.4" />-->
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(IsAndroidBuild)' == 'true'">
+        <Compile Include="Platforms\Android\**\*.cs" />
+        <Compile Include="Platforms\Shared\**\*.cs" />
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(IsIosBuild)' == 'true'">
+        <Compile Include="Platforms\Apple\**\*.cs" />
+        <Compile Include="Platforms\Shared\**\*.cs" />
+        <Compile Include="Platforms\iOS\**\*.cs" />
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(IsWindowsBuild)' == 'true'">
+        <Compile Include="Platforms\Windows\**\*.cs" />
+        <Compile Include="Platforms\Shared\**\*.cs" />
+    </ItemGroup> 
+
+    <!--
+    <ItemGroup Condition="'$(IsWebAssembly)' == 'true'">
+        <Compile Include="Platforms\WebAssembly\**\*.cs" />
+        <PackageReference Include="Microsoft.JSInterop.WebAssembly" Version="7.0.5" />
+        <WasmExtraFilesToDeploy Include="Platforms\WebAssembly\*.css" />
+		<WasmExtraFilesToDeploy Include="Platforms\WebAssembly\*.js" />
+	</ItemGroup>
+    -->
+</Project>
